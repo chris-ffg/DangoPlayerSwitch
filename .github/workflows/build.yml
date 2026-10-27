@@ -1,0 +1,60 @@
+name: Build DangoPlayer Switch
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: devkitpro/devkita64:latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Switch dependencies
+        run: |
+          # 1. Instalar librerías complementarias de devkitPro
+          dkp-pacman -S --needed --noconfirm \
+            switch-sdl2 \
+            switch-sdl2_ttf \
+            switch-sdl2_image \
+            switch-sdl2_gfx \
+            switch-sdl2_mixer \
+            switch-mesa \
+            switch-glad \
+            switch-freetype \
+            switch-harfbuzz \
+            switch-libpng \
+            switch-libjpeg-turbo \
+            switch-libwebp \
+            switch-zlib \
+            switch-bzip2 \
+            switch-libass \
+            switch-libfribidi \
+            switch-dav1d \
+            switch-curl \
+            switch-mbedtls
+
+          # 2. Instalar motor libmpv y FFmpeg para Switch (con aceleración NVDEC)
+          curl -fLO https://github.com/xfangfang/wiliwili/releases/download/v0.1.0/switch-ffmpeg-7.1-1-any.pkg.tar.zst
+          curl -fLO https://github.com/xfangfang/wiliwili/releases/download/v0.1.0/switch-libmpv-0.36.0-3-any.pkg.tar.zst
+          dkp-pacman -U --noconfirm switch-ffmpeg-7.1-1-any.pkg.tar.zst switch-libmpv-0.36.0-3-any.pkg.tar.zst
+          rm -f *.pkg.tar.zst
+
+      - name: Build DangoPlayerSwitch.nro
+        run: |
+          make -j$(nproc)
+
+      - name: Upload NRO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DangoPlayerSwitch
+          path: |
+            DangoPlayerSwitch.nro
+            DangoPlayerSwitch.nacp
