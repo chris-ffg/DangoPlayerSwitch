@@ -208,7 +208,6 @@ std::string ResolveUrl(const std::string& baseUrl, const std::string& targetUrl)
     }
     return safeBase + "/" + safeTarget;
 }
-}
 
 bool ParseM3U(const std::string& content, Playlist& outPlaylist, const std::string& baseUrl) {
     outPlaylist.channels.clear();
