@@ -10,6 +10,7 @@
 #include "app.h"
 #include "ui/ui_common.h"
 #include "utils/logger.h"
+#include <SDL2/SDL2_gfxPrimitives.h>
 #include <cmath>
 #include <cstdio>
 
