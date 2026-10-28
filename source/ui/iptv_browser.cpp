@@ -138,29 +138,33 @@ void IPTVBrowser::RenderLoadingFrame(const std::string& message) {
 bool IPTVBrowser::MightBeSubPlaylist(const ChannelItem& ch) const {
     std::string urlLower = StringUtils::ToLower(ch.url);
     std::string extLower = StringUtils::ToLower(StringUtils::GetExtension(ch.url));
-    std::string nameLower = StringUtils::ToLower(ch.name);
 
-    if (extLower == ".ts" || extLower == ".mp4" || extLower == ".mkv" ||
-        urlLower.rfind("rtsp://", 0) == 0 || urlLower.rfind("rtmp://", 0) == 0) {
+    // Definite direct video/audio files — always playable streams
+    static const std::set<std::string> directMedia = {
+        ".mp4", ".mkv", ".ts", ".avi", ".flv", ".mov", ".wmv",
+        ".webm", ".m4v", ".3gp", ".mpg", ".mpeg", ".vob",
+        ".mp3", ".aac", ".flac", ".ogg", ".wav", ".m4a", ".opus", ".ac3"
+    };
+    if (directMedia.find(extLower) != directMedia.end()) {
         return false;
     }
 
-    if (nameLower.find("carpeta") != std::string::npos ||
-        nameLower.find("folder") != std::string::npos ||
-        nameLower.find("categoria") != std::string::npos ||
-        nameLower.find("temporada") != std::string::npos ||
-        nameLower.find("seccion") != std::string::npos) {
+    // Streaming protocols
+    if (urlLower.rfind("rtsp://", 0) == 0 ||
+        urlLower.rfind("rtmp://", 0) == 0 ||
+        urlLower.rfind("udp://", 0) == 0 ||
+        urlLower.rfind("rtp://", 0) == 0) {
+        return false;
+    }
+
+    // Passion Wii Streaming endpoints are always folders
+    if (urlLower.find("passionstreamingwii") != std::string::npos ||
+        urlLower.find("myartsonline.com") != std::string::npos) {
         return true;
     }
 
-    if (urlLower.find("type=m3u") != std::string::npos ||
-        urlLower.find("output=m3u") != std::string::npos ||
-        urlLower.find("/playlist") != std::string::npos ||
-        urlLower.find("/category") != std::string::npos) {
-        return true;
-    }
-
-    return false;
+    // If URL has no extension or is ambiguous, it might be a sub-playlist
+    return true;
 }
 
 // ============================================================================
@@ -169,10 +173,10 @@ bool IPTVBrowser::MightBeSubPlaylist(const ChannelItem& ch) const {
 void IPTVBrowser::HandleItemClick(const ChannelItem& ch) {
     bool isFolder = (ch.type == PlaylistItemType::FolderContainer);
 
-    // If marked as stream but has sub-playlist characteristics, perform fast probe
+    // If marked as stream but has no definite video extension, probe it before playback!
     if (!isFolder && MightBeSubPlaylist(ch)) {
-        toast.Show("Verificando contenido...", 1.2f);
-        RenderLoadingFrame("Verificando contenido...");
+        toast.Show("Verificando carpeta...", 1.2f);
+        RenderLoadingFrame("Verificando carpeta...");
         if (HttpClient::ProbeIsPlaylist(ch.url)) {
             isFolder = true;
         }
@@ -196,15 +200,16 @@ void IPTVBrowser::HandleItemClick(const ChannelItem& ch) {
 
 void IPTVBrowser::NavigateToFolder(const ChannelItem& ch) {
     Logger::Info("IPTVBrowser: Navigating to sub-folder -> %s (%s)", ch.name.c_str(), ch.url.c_str());
-    toast.Show("Cargando carpeta: " + ch.name + "...", 3.0f);
-    RenderLoadingFrame("Cargando carpeta: " + ch.name + "...");
+    toast.Show("Cargando: " + ch.name + "...", 3.0f);
+    RenderLoadingFrame("Cargando: " + ch.name + "...");
 
     Playlist subPlaylist;
     bool ok = false;
-    if (ch.url.rfind("http://", 0) == 0 || ch.url.rfind("https://", 0) == 0) {
-        ok = PlaylistParser::LoadFromUrl(ch.url, subPlaylist);
+    std::string safeUrl = HttpClient::SanitizeUrl(ch.url);
+    if (safeUrl.rfind("http://", 0) == 0 || safeUrl.rfind("https://", 0) == 0) {
+        ok = PlaylistParser::LoadFromUrl(safeUrl, subPlaylist);
     } else {
-        ok = PlaylistParser::LoadFromFile(ch.url, subPlaylist);
+        ok = PlaylistParser::LoadFromFile(safeUrl, subPlaylist);
     }
 
     if (!ok || subPlaylist.channels.empty()) {

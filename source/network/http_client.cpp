@@ -11,6 +11,28 @@ namespace HttpClient {
 
 static bool sInitialized = false;
 
+std::string SanitizeUrl(const std::string& url) {
+    if (url.empty()) return url;
+
+    // Trim whitespace
+    size_t start = url.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) return "";
+    size_t end = url.find_last_not_of(" \t\r\n");
+    std::string trimmed = url.substr(start, end - start + 1);
+
+    // Replace unencoded spaces with %20
+    std::string clean;
+    clean.reserve(trimmed.size() + 16);
+    for (size_t i = 0; i < trimmed.size(); i++) {
+        if (trimmed[i] == ' ') {
+            clean += "%20";
+        } else {
+            clean += trimmed[i];
+        }
+    }
+    return clean;
+}
+
 static size_t WriteStringCallback(void* contents, size_t size, size_t nmemb, void* userp) {
     size_t totalSize = size * nmemb;
     std::string* str = static_cast<std::string*>(userp);
@@ -54,8 +76,9 @@ bool Get(const std::string& url, std::string& outResponse, long timeoutSec) {
     }
 
     outResponse.clear();
+    std::string safeUrl = SanitizeUrl(url);
 
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_URL, safeUrl.c_str());
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "DangoPlayer-Switch/0.1.0");
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeoutSec);
@@ -66,7 +89,7 @@ bool Get(const std::string& url, std::string& outResponse, long timeoutSec) {
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
 
-    Logger::Info("HttpClient: Fetching %s", url.c_str());
+    Logger::Info("HttpClient: Fetching %s", safeUrl.c_str());
     CURLcode res = curl_easy_perform(curl);
 
     long httpCode = 0;
@@ -75,7 +98,7 @@ bool Get(const std::string& url, std::string& outResponse, long timeoutSec) {
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        Logger::Error("HttpClient: Request failed: %s", curl_easy_strerror(res));
+        Logger::Error("HttpClient: Request failed for %s: %s", safeUrl.c_str(), curl_easy_strerror(res));
         return false;
     }
 
@@ -83,7 +106,7 @@ bool Get(const std::string& url, std::string& outResponse, long timeoutSec) {
         Logger::Info("HttpClient: Received %zu bytes (HTTP %ld)", outResponse.size(), httpCode);
         return true;
     } else {
-        Logger::Warn("HttpClient: HTTP Error code %ld", httpCode);
+        Logger::Warn("HttpClient: HTTP Error code %ld for %s", httpCode, safeUrl.c_str());
         return false;
     }
 }
@@ -93,13 +116,14 @@ bool ProbeIsPlaylist(const std::string& url, long timeoutSec) {
         if (!Initialize()) return false;
     }
 
+    std::string safeUrl = SanitizeUrl(url);
     CURL* curl = curl_easy_init();
     if (!curl) return false;
 
     std::string buffer;
     buffer.reserve(2048);
 
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_URL, safeUrl.c_str());
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "DangoPlayer-Switch/0.1.0");
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeoutSec);
@@ -120,7 +144,7 @@ bool ProbeIsPlaylist(const std::string& url, long timeoutSec) {
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK && res != CURLE_PARTIAL_FILE) {
-        Logger::Warn("HttpClient::ProbeIsPlaylist failed for %s: %s", url.c_str(), curl_easy_strerror(res));
+        Logger::Warn("HttpClient::ProbeIsPlaylist failed for %s: %s", safeUrl.c_str(), curl_easy_strerror(res));
         return false;
     }
 
@@ -128,11 +152,15 @@ bool ProbeIsPlaylist(const std::string& url, long timeoutSec) {
     bool ctPlaylist = (contentType.find("mpegurl") != std::string::npos ||
                        contentType.find("x-scpls") != std::string::npos ||
                        contentType.find("application/x-mpegURL") != std::string::npos ||
-                       contentType.find("vnd.apple.mpegurl") != std::string::npos);
+                       contentType.find("vnd.apple.mpegurl") != std::string::npos ||
+                       contentType.find("text/plain") != std::string::npos);
 
-    // Check payload magic markers
-    bool hasExtM3U = (buffer.find("#EXTM3U") != std::string::npos);
-    bool hasPLS = (buffer.find("[playlist]") != std::string::npos || buffer.find("[Playlist]") != std::string::npos);
+    // Check payload magic markers (M3U or PLS)
+    bool hasExtM3U = (buffer.find("#EXTM3U") != std::string::npos ||
+                      buffer.find("#extm3u") != std::string::npos ||
+                      buffer.find("#EXTINF") != std::string::npos);
+    bool hasPLS = (buffer.find("[playlist]") != std::string::npos ||
+                   buffer.find("[Playlist]") != std::string::npos);
 
     if (!hasExtM3U && !hasPLS && !ctPlaylist) {
         return false;
@@ -156,6 +184,7 @@ bool DownloadFile(const std::string& url, const std::string& destPath,
         if (!Initialize()) return false;
     }
 
+    std::string safeUrl = SanitizeUrl(url);
     FILE* fp = fopen(destPath.c_str(), "wb");
     if (!fp) {
         Logger::Error("HttpClient: Cannot open destination file %s", destPath.c_str());
@@ -168,7 +197,7 @@ bool DownloadFile(const std::string& url, const std::string& destPath,
         return false;
     }
 
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_URL, safeUrl.c_str());
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "DangoPlayer-Switch/0.1.0");
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeoutSec);

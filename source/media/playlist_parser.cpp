@@ -80,7 +80,7 @@ PlaylistItemType DetectItemType(const std::string& extInfLine, const std::string
         return PlaylistItemType::FolderContainer;
     }
 
-    // 3. Known direct media stream extensions (high priority)
+    // 3. Known direct media stream extensions (high priority: definitely playable media files)
     static const std::set<std::string> mediaExtensions = {
         ".mp4", ".mkv", ".ts", ".avi", ".flv", ".mov", ".wmv",
         ".webm", ".m4v", ".3gp", ".mpg", ".mpeg", ".vob",
@@ -114,7 +114,42 @@ PlaylistItemType DetectItemType(const std::string& extInfLine, const std::string
         return PlaylistItemType::FolderContainer;
     }
 
-    // 7. Directory or category path segments without media extensions
+    // 7. Passion Wii Streaming specific domain detection
+    // In PassionWii, all category and sub-playlist endpoints are hosted on
+    // passionstreamingwii / myartsonline and do not have video file extensions.
+    if (urlLower.find("passionstreamingwii") != std::string::npos ||
+        urlLower.find("myartsonline.com") != std::string::npos) {
+        return PlaylistItemType::FolderContainer;
+    }
+
+    // 8. Category / Section title keywords when URL has NO video file extension
+    // Entries like "Streaming General", "Películas", "Series", "Zona Kids", "Novedades"
+    if (lineLower.find("streaming") != std::string::npos ||
+        lineLower.find("series") != std::string::npos ||
+        lineLower.find("película") != std::string::npos ||
+        lineLower.find("pelicula") != std::string::npos ||
+        lineLower.find("novela") != std::string::npos ||
+        lineLower.find("dorama") != std::string::npos ||
+        lineLower.find("anime") != std::string::npos ||
+        lineLower.find("temporada") != std::string::npos ||
+        lineLower.find("season") != std::string::npos ||
+        lineLower.find("zona kids") != std::string::npos ||
+        lineLower.find("novedades") != std::string::npos ||
+        lineLower.find("aportadores") != std::string::npos ||
+        lineLower.find("música") != std::string::npos ||
+        lineLower.find("musica") != std::string::npos ||
+        lineLower.find("studio") != std::string::npos) {
+        return PlaylistItemType::FolderContainer;
+    }
+
+    // 9. General rule: Any HTTP URL with NO extension (extLower.empty())
+    // Direct video streams virtually always have a file extension (.mp4, .mkv, .ts, .m3u8).
+    // An HTTP link without any extension is almost always an M3U/API sub-playlist container!
+    if (extLower.empty()) {
+        return PlaylistItemType::FolderContainer;
+    }
+
+    // 10. Directory or category path segments without media extensions
     if (urlLower.find("/category/") != std::string::npos ||
         urlLower.find("/categories/") != std::string::npos ||
         urlLower.find("/sublist/") != std::string::npos ||
@@ -132,42 +167,47 @@ PlaylistItemType DetectItemType(const std::string& extInfLine, const std::string
 std::string ResolveUrl(const std::string& baseUrl, const std::string& targetUrl) {
     if (targetUrl.empty()) return "";
 
+    std::string safeTarget = HttpClient::SanitizeUrl(targetUrl);
+
     // Already an absolute URL / URI?
-    if (targetUrl.rfind("http://", 0) == 0 ||
-        targetUrl.rfind("https://", 0) == 0 ||
-        targetUrl.rfind("sdmc:/", 0) == 0 ||
-        targetUrl.rfind("romfs:/", 0) == 0 ||
-        targetUrl.rfind("rtsp://", 0) == 0 ||
-        targetUrl.rfind("rtmp://", 0) == 0 ||
-        targetUrl.rfind("file://", 0) == 0) {
-        return targetUrl;
+    if (safeTarget.rfind("http://", 0) == 0 ||
+        safeTarget.rfind("https://", 0) == 0 ||
+        safeTarget.rfind("sdmc:/", 0) == 0 ||
+        safeTarget.rfind("romfs:/", 0) == 0 ||
+        safeTarget.rfind("rtsp://", 0) == 0 ||
+        safeTarget.rfind("rtmp://", 0) == 0 ||
+        safeTarget.rfind("file://", 0) == 0) {
+        return safeTarget;
     }
 
-    if (baseUrl.empty()) return targetUrl;
+    if (baseUrl.empty()) return safeTarget;
+
+    std::string safeBase = HttpClient::SanitizeUrl(baseUrl);
 
     // Root-relative path
-    if (targetUrl[0] == '/') {
-        size_t protoEnd = baseUrl.find("://");
+    if (safeTarget[0] == '/') {
+        size_t protoEnd = safeBase.find("://");
         if (protoEnd != std::string::npos) {
-            size_t hostEnd = baseUrl.find('/', protoEnd + 3);
+            size_t hostEnd = safeBase.find('/', protoEnd + 3);
             if (hostEnd != std::string::npos) {
-                return baseUrl.substr(0, hostEnd) + targetUrl;
+                return safeBase.substr(0, hostEnd) + safeTarget;
             } else {
-                return baseUrl + targetUrl;
+                return safeBase + safeTarget;
             }
         }
-        if (baseUrl.rfind("sdmc:/", 0) == 0) {
-            return "sdmc:" + targetUrl;
+        if (safeBase.rfind("sdmc:/", 0) == 0) {
+            return "sdmc:" + safeTarget;
         }
-        return targetUrl;
+        return safeTarget;
     }
 
     // Directory-relative path
-    size_t lastSlash = baseUrl.find_last_of('/');
+    size_t lastSlash = safeBase.find_last_of('/');
     if (lastSlash != std::string::npos) {
-        return baseUrl.substr(0, lastSlash + 1) + targetUrl;
+        return safeBase.substr(0, lastSlash + 1) + safeTarget;
     }
-    return baseUrl + "/" + targetUrl;
+    return safeBase + "/" + safeTarget;
+}
 }
 
 bool ParseM3U(const std::string& content, Playlist& outPlaylist, const std::string& baseUrl) {
@@ -241,6 +281,10 @@ bool ParseM3U(const std::string& content, Playlist& outPlaylist, const std::stri
 
                 // Detect whether this item is a playable stream or a subfolder container
                 currentItem.type = DetectItemType(pendingExtInfLine, finalUrl);
+
+                if (currentItem.type == PlaylistItemType::FolderContainer && currentItem.groupTitle == "General") {
+                    currentItem.groupTitle = "Carpetas";
+                }
 
                 if (currentItem.name.empty()) {
                     currentItem.name = StringUtils::GetFilename(finalUrl);

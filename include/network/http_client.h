@@ -17,6 +17,9 @@ namespace HttpClient {
     /// Cleanup the curl subsystem
     void Shutdown();
 
+    /// Sanitize URL (encode spaces to %20, trim whitespace)
+    std::string SanitizeUrl(const std::string& url);
+
     /// Download a remote URL into a string. Returns true on HTTP 200 OK.
     bool Get(const std::string& url, std::string& outResponse, long timeoutSec = 15);
 
