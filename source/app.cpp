@@ -60,7 +60,9 @@ bool App::Initialize() {
 // ============================================================================
 
 bool App::InitSDL() {
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK) < 0) {
+    // Note: SDL_INIT_AUDIO is intentionally omitted so libmpv's native Nintendo Switch
+    // audren driver has exclusive, low-latency access to the console audio hardware.
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK) < 0) {
         Logger::Error("SDL_Init failed: %s", SDL_GetError());
         return false;
     }
@@ -88,15 +90,6 @@ bool App::InitSDL() {
     if (!renderer) {
         Logger::Error("SDL_CreateRenderer failed: %s", SDL_GetError());
         return false;
-    }
-
-    // Ensure active OpenGL context for libmpv video rendering
-    if (!SDL_GL_GetCurrentContext()) {
-        SDL_GLContext glContext = SDL_GL_CreateContext(window);
-        if (glContext) {
-            SDL_GL_MakeCurrent(window, glContext);
-            Logger::Info("App: OpenGL context created and made current");
-        }
     }
 
     // Enable alpha blending for transparent overlays

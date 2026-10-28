@@ -51,6 +51,9 @@ bool MediaPlayer::Initialize() {
         return false;
     }
 
+    // Audio output: use native Nintendo Switch audren driver
+    mpv_set_option_string(mpv, "ao", "audren,null,");
+
     // Hardware decoding configuration (Tegra X1 NVDEC)
     mpv_set_option_string(mpv, "hwdec", "auto-safe");
     mpv_set_option_string(mpv, "tls-verify", "no");
@@ -69,6 +72,7 @@ bool MediaPlayer::Initialize() {
     // Fast decoding optimizations
     mpv_set_option_string(mpv, "vd-lavc-fast", "yes");
     mpv_set_option_string(mpv, "vd-lavc-skiploopfilter", "all");
+    mpv_set_option_string(mpv, "vd-lavc-threads", "4");
 
     // Audio & Subtitle configuration
     mpv_set_option_string(mpv, "sub-auto", "fuzzy");
@@ -91,13 +95,11 @@ bool MediaPlayer::Initialize() {
         return false;
     }
 
-    // Initialize libmpv OpenGL render context
+    // Initialize libmpv OpenGL render context without advanced control to avoid deadlock
     mpv_opengl_init_params gl_init = { get_proc_address_mpv, nullptr };
-    int adv_ctrl = 1;
     mpv_render_param params[] = {
         { MPV_RENDER_PARAM_API_TYPE, (void*)MPV_RENDER_API_TYPE_OPENGL },
         { MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &gl_init },
-        { MPV_RENDER_PARAM_ADVANCED_CONTROL, &adv_ctrl },
         { MPV_RENDER_PARAM_INVALID, nullptr }
     };
 
@@ -142,7 +144,12 @@ void MediaPlayer::Shutdown() {
 void MediaPlayer::RenderVideo() {
     if (!mpv_gl) return;
 
-    mpv_opengl_fbo fbo = { 0, 1280, 720, 0 };
+    // Process render updates
+    mpv_render_context_update(mpv_gl);
+
+    int w = 1280;
+    int h = 720;
+    mpv_opengl_fbo fbo = { 0, w, h, 0 };
     int flip_y = 0;
     mpv_render_param params[] = {
         { MPV_RENDER_PARAM_OPENGL_FBO, &fbo },
@@ -152,7 +159,7 @@ void MediaPlayer::RenderVideo() {
     mpv_render_context_render(mpv_gl, params);
 }
 
-bool MediaPlayer::Open(const std::string& path) {
+bool MediaPlayer::Open(const std::string& path, const std::string& explicitTitle) {
     if (!initialized) {
         if (!Initialize()) return false;
     }
@@ -164,20 +171,19 @@ bool MediaPlayer::Open(const std::string& path) {
     metadata = MediaMetadata();
     metadata.path = safePath;
 
-    // URL decode filename for clean title display in HUD
-    std::string title = StringUtils::GetFilename(path);
-    size_t p = 0;
-    while ((p = title.find("%20", p)) != std::string::npos) {
-        title.replace(p, 3, " ");
-        p += 1;
+    // If explicitTitle was passed from the playlist item, use it (decoded)
+    if (!explicitTitle.empty()) {
+        metadata.title = StringUtils::UrlDecode(explicitTitle);
+    } else {
+        std::string rawName = StringUtils::GetFilename(path);
+        metadata.title = StringUtils::UrlDecode(rawName);
     }
-    metadata.title = title;
 
     position = 0.0;
     duration = 0.0;
     status = PlayerStatus::Loading;
 
-    Logger::Info("MediaPlayer: Loading file/stream: %s", safePath.c_str());
+    Logger::Info("MediaPlayer: Loading stream: %s (Title: %s)", safePath.c_str(), metadata.title.c_str());
 
     const char* cmd[] = {"loadfile", safePath.c_str(), "replace", nullptr};
     int res = mpv_command(mpv, cmd);
@@ -186,6 +192,10 @@ bool MediaPlayer::Open(const std::string& path) {
         status = PlayerStatus::Error;
         return false;
     }
+
+    // Force playback to start unpaused
+    int pauseVal = 0;
+    mpv_set_property(mpv, "pause", MPV_FORMAT_FLAG, &pauseVal);
 
     // Check if resume position exists
     if (Config::Instance().Get().resumePlayback) {

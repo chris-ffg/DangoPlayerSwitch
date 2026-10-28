@@ -96,4 +96,33 @@ std::string Truncate(const std::string& str, size_t maxChars) {
     return str.substr(0, maxChars - 3) + "...";
 }
 
+std::string UrlDecode(const std::string& str) {
+    std::string out;
+    out.reserve(str.size());
+
+    for (size_t i = 0; i < str.size(); i++) {
+        if (str[i] == '%' && i + 2 < str.size()) {
+            char h1 = str[i + 1];
+            char h2 = str[i + 2];
+            int v1 = (h1 >= '0' && h1 <= '9') ? (h1 - '0') :
+                     (h1 >= 'a' && h1 <= 'f') ? (h1 - 'a' + 10) :
+                     (h1 >= 'A' && h1 <= 'F') ? (h1 - 'A' + 10) : -1;
+            int v2 = (h2 >= '0' && h2 <= '9') ? (h2 - '0') :
+                     (h2 >= 'a' && h2 <= 'f') ? (h2 - 'a' + 10) :
+                     (h2 >= 'A' && h2 <= 'F') ? (h2 - 'A' + 10) : -1;
+            if (v1 >= 0 && v2 >= 0) {
+                out += static_cast<char>((v1 << 4) | v2);
+                i += 2;
+            } else {
+                out += str[i];
+            }
+        } else if (str[i] == '+') {
+            out += ' ';
+        } else {
+            out += str[i];
+        }
+    }
+    return out;
+}
+
 }  // namespace StringUtils

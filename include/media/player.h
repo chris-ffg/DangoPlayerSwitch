@@ -29,7 +29,7 @@ public:
     void Shutdown();
 
     /// Open and start playing a media file or stream URL
-    bool Open(const std::string& path);
+    bool Open(const std::string& path, const std::string& explicitTitle = "");
 
     /// Render the current MPV video frame into the active OpenGL framebuffer
     void RenderVideo();

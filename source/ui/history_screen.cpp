@@ -60,11 +60,11 @@ void HistoryScreen::HandleInput(u64 kDown, u64 kHeld) {
             if (activeTab == 0) {
                 const auto& h = HistoryManager::Instance().GetEntries()[selectedIndex];
                 Logger::Info("HistoryScreen: Resuming from history -> %s", h.pathOrUrl.c_str());
-                app->PushScreen(std::make_unique<PlayerScreen>(app, h.pathOrUrl));
+                app->PushScreen(std::make_unique<PlayerScreen>(app, h.pathOrUrl, h.title));
             } else {
                 const auto& f = FavoritesManager::Instance().GetFavorites()[selectedIndex];
                 Logger::Info("HistoryScreen: Playing favorite -> %s", f.pathOrUrl.c_str());
-                app->PushScreen(std::make_unique<PlayerScreen>(app, f.pathOrUrl));
+                app->PushScreen(std::make_unique<PlayerScreen>(app, f.pathOrUrl, f.title));
             }
         }
     }
@@ -134,9 +134,11 @@ void HistoryScreen::HandleTouch(const TouchEvent& touch) {
             touch.y >= y && touch.y <= y + ITEM_H) {
             selectedIndex = idx;
             if (activeTab == 0) {
-                app->PushScreen(std::make_unique<PlayerScreen>(app, HistoryManager::Instance().GetEntries()[idx].pathOrUrl));
+                const auto& ent = HistoryManager::Instance().GetEntries()[idx];
+                app->PushScreen(std::make_unique<PlayerScreen>(app, ent.pathOrUrl, ent.title));
             } else {
-                app->PushScreen(std::make_unique<PlayerScreen>(app, FavoritesManager::Instance().GetFavorites()[idx].pathOrUrl));
+                const auto& fav = FavoritesManager::Instance().GetFavorites()[idx];
+                app->PushScreen(std::make_unique<PlayerScreen>(app, fav.pathOrUrl, fav.title));
             }
             return;
         }

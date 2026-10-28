@@ -11,7 +11,7 @@
 
 class PlayerScreen : public Screen {
 public:
-    PlayerScreen(App* app, const std::string& filePath);
+    PlayerScreen(App* app, const std::string& filePath, const std::string& title = "");
     ~PlayerScreen() override;
 
     void OnEnter() override;
@@ -24,6 +24,7 @@ public:
 
 private:
     std::string mediaPath;
+    std::string mediaTitle;
     PlayerOverlay overlay;
     bool hasShownError = false;
     float errorTimer = 2.5f;

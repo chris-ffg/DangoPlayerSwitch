@@ -28,4 +28,7 @@ namespace StringUtils {
 
     /// Truncate string with ellipsis ("...") if it exceeds maxChars.
     std::string Truncate(const std::string& str, size_t maxChars);
+
+    /// Decode percent-encoded characters (e.g. "%20" -> " ", "%28" -> "(", "%29" -> ")").
+    std::string UrlDecode(const std::string& str);
 }

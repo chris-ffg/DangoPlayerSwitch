@@ -172,7 +172,7 @@ void FileBrowser::HandleItemSelection(int index) {
         OpenDirectory(item.fullPath);
     } else if (item.type == FileType::Video || item.type == FileType::Audio) {
         Logger::Info("FileBrowser: Launching player for %s", item.fullPath.c_str());
-        app->PushScreen(std::make_unique<PlayerScreen>(app, item.fullPath));
+        app->PushScreen(std::make_unique<PlayerScreen>(app, item.fullPath, item.name));
     } else if (item.type == FileType::Playlist) {
         Logger::Info("FileBrowser: Open playlist -> %s", item.fullPath.c_str());
         app->PushScreen(std::make_unique<IPTVBrowser>(app, item.fullPath));

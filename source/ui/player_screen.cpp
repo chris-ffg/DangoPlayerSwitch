@@ -8,13 +8,13 @@
 #include "ui/ui_common.h"
 #include "utils/logger.h"
 
-PlayerScreen::PlayerScreen(App* app, const std::string& filePath)
-    : Screen(app), mediaPath(filePath), overlay(app) {}
+PlayerScreen::PlayerScreen(App* app, const std::string& filePath, const std::string& title)
+    : Screen(app), mediaPath(filePath), mediaTitle(title), overlay(app) {}
 
 PlayerScreen::~PlayerScreen() {}
 
 void PlayerScreen::OnEnter() {
-    Logger::Info("PlayerScreen: Starting playback for %s", mediaPath.c_str());
+    Logger::Info("PlayerScreen: Starting playback for %s (Title: %s)", mediaPath.c_str(), mediaTitle.c_str());
 
     // When media finishes playing, automatically return to previous screen
     MediaPlayer::Instance().SetOnEndedCallback([this]() {
@@ -22,7 +22,7 @@ void PlayerScreen::OnEnter() {
         this->app->PopScreen();
     });
 
-    MediaPlayer::Instance().Open(mediaPath);
+    MediaPlayer::Instance().Open(mediaPath, mediaTitle);
     overlay.Show();
 }
 
@@ -83,6 +83,9 @@ void PlayerScreen::Render(SDL_Renderer* renderer) {
                              {Layout::SCREEN_W / 2 - 250, Layout::SCREEN_H / 2 + 5, 500, 35}, Colors::TEXT_SECONDARY);
         return;
     }
+
+    // Flush any pending SDL2 draw calls
+    SDL_RenderFlush(renderer);
 
     // 1. Render video frame directly to OpenGL framebuffer
     MediaPlayer::Instance().RenderVideo();

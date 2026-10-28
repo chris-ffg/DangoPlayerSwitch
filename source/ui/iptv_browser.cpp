@@ -203,7 +203,7 @@ void IPTVBrowser::HandleItemClick(const ChannelItem& ch) {
         // --------------------------------------------------------------------
         // Direct media stream (.mp4, .mkv, .ts, live HLS): launch PlayerScreen.
         Logger::Info("IPTVBrowser: Playing stream -> %s (%s)", ch.name.c_str(), ch.url.c_str());
-        app->PushScreen(std::make_unique<PlayerScreen>(app, ch.url));
+        app->PushScreen(std::make_unique<PlayerScreen>(app, ch.url, ch.name));
     }
 }
 
