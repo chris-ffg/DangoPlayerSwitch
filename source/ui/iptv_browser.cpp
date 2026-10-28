@@ -1,10 +1,11 @@
 // ============================================================================
-// DangoPlayer Switch — IPTV Browser Implementation (with Nested M3U Support)
+// DangoPlayer Switch — IPTV Horizontal Shelf & Sidebar Implementation
 // ============================================================================
 
 #include "ui/iptv_browser.h"
 #include "ui/player_screen.h"
 #include "ui/file_browser.h"
+#include "ui/settings_screen.h"
 #include "media/favorites_manager.h"
 #include "network/http_client.h"
 #include "app.h"
@@ -14,11 +15,13 @@
 #include "utils/logger.h"
 #include <algorithm>
 #include <set>
+#include <cmath>
 #include <cstdio>
 
 // Root Browser Constructor
 IPTVBrowser::IPTVBrowser(App* app, const std::string& autoLoadPath)
-    : Screen(app), isSubFolder(false), hasLocalPlaylist(false) {
+    : Screen(app), isSubFolder(false), hasLocalPlaylist(false),
+      focusZone(FocusZone::Shelf), sidebarIndex(1) {
     if (!autoLoadPath.empty()) {
         LoadPlaylist(autoLoadPath);
     } else if (PlaylistManager::Instance().HasActivePlaylist()) {
@@ -31,7 +34,8 @@ IPTVBrowser::IPTVBrowser(App* app, const std::string& autoLoadPath)
 
 // Sub-Folder Navigation Constructor
 IPTVBrowser::IPTVBrowser(App* app, const Playlist& subPlaylist, const std::string& title, bool isSub)
-    : Screen(app), isSubFolder(isSub), folderTitle(title), currentPlaylist(subPlaylist), hasLocalPlaylist(true) {
+    : Screen(app), isSubFolder(isSub), folderTitle(title), currentPlaylist(subPlaylist), hasLocalPlaylist(true),
+      focusZone(FocusZone::Shelf), sidebarIndex(1) {
     showPlaylistsView = false;
     RefreshChannelList();
 }
@@ -56,10 +60,11 @@ void IPTVBrowser::LoadPlaylist(const std::string& pathOrUrl) {
 
     Playlist pl;
     bool ok = false;
-    if (pathOrUrl.rfind("http://", 0) == 0 || pathOrUrl.rfind("https://", 0) == 0) {
-        ok = PlaylistParser::LoadFromUrl(pathOrUrl, pl);
+    std::string safeUrl = HttpClient::SanitizeUrl(pathOrUrl);
+    if (safeUrl.rfind("http://", 0) == 0 || safeUrl.rfind("https://", 0) == 0) {
+        ok = PlaylistParser::LoadFromUrl(safeUrl, pl);
     } else {
-        ok = PlaylistParser::LoadFromFile(pathOrUrl, pl);
+        ok = PlaylistParser::LoadFromFile(safeUrl, pl);
     }
 
     if (ok && !pl.channels.empty()) {
@@ -71,7 +76,8 @@ void IPTVBrowser::LoadPlaylist(const std::string& pathOrUrl) {
         showPlaylistsView = false;
         groupIndex = 0;
         channelIndex = 0;
-        scrollOffset = 0;
+        currentScrollX = 0.0f;
+        targetScrollX = 0.0f;
         searchQuery.clear();
 
         RefreshChannelList();
@@ -89,7 +95,8 @@ void IPTVBrowser::RefreshChannelList() {
     }
     displayedChannels = pl.GetFilteredChannels(currentGroup, searchQuery);
     channelIndex = 0;
-    scrollOffset = 0;
+    currentScrollX = 0.0f;
+    targetScrollX = 0.0f;
 }
 
 void IPTVBrowser::CycleGroup(int direction) {
@@ -114,7 +121,7 @@ void IPTVBrowser::PromptAddUrl() {
 
 void IPTVBrowser::PromptSearch() {
     std::string query = SwkbdHelper::Show(
-        "Buscar canal o carpeta:",
+        "Buscar película, serie o canal:",
         searchQuery, 64
     );
     searchQuery = query;
@@ -140,7 +147,7 @@ bool IPTVBrowser::MightBeSubPlaylist(const ChannelItem& ch) const {
     std::string urlLower = StringUtils::ToLower(ch.url);
     std::string extLower = StringUtils::ToLower(StringUtils::GetExtension(ch.url));
 
-    // Definite direct video/audio files — always playable streams
+    // Definite direct media formats — always playable streams
     static const std::set<std::string> directMedia = {
         ".mp4", ".mkv", ".ts", ".avi", ".flv", ".mov", ".wmv",
         ".webm", ".m4v", ".3gp", ".mpg", ".mpeg", ".vob",
@@ -150,7 +157,7 @@ bool IPTVBrowser::MightBeSubPlaylist(const ChannelItem& ch) const {
         return false;
     }
 
-    // Streaming protocols
+    // Direct streaming protocols
     if (urlLower.rfind("rtsp://", 0) == 0 ||
         urlLower.rfind("rtmp://", 0) == 0 ||
         urlLower.rfind("udp://", 0) == 0 ||
@@ -186,7 +193,7 @@ void IPTVBrowser::HandleItemClick(const ChannelItem& ch) {
 
     if (isFolder) {
         // --------------------------------------------------------------------
-        // BIFURCATION A: FOLDER / CONTAINER NAVIGATION
+        // BIFURCATION A: FOLDER / CONTAINER NAVIGATION (Stack PUSH)
         // --------------------------------------------------------------------
         // Do NOT invoke VideoPlayerEngine. Navigate into sub-directory.
         NavigateToFolder(ch);
@@ -194,7 +201,7 @@ void IPTVBrowser::HandleItemClick(const ChannelItem& ch) {
         // --------------------------------------------------------------------
         // BIFURCATION B: MEDIA STREAM PLAYBACK
         // --------------------------------------------------------------------
-        // Direct media stream (.ts, .mp4, live HLS): launch PlayerScreen.
+        // Direct media stream (.mp4, .mkv, .ts, live HLS): launch PlayerScreen.
         Logger::Info("IPTVBrowser: Playing stream -> %s (%s)", ch.name.c_str(), ch.url.c_str());
         app->PushScreen(std::make_unique<PlayerScreen>(app, ch.url));
     }
@@ -215,7 +222,6 @@ void IPTVBrowser::NavigateToFolder(const ChannelItem& ch) {
     }
 
     if (!ok || subPlaylist.channels.empty()) {
-        // REQUIREMENT 3: Error handling
         // If sub-folder is empty or unreachable, show alert toast and remain in current folder.
         Logger::Warn("IPTVBrowser: Sub-folder is empty or unreachable -> %s", ch.url.c_str());
         toast.Show("Carpeta vacia o no disponible", 2.5f);
@@ -226,9 +232,7 @@ void IPTVBrowser::NavigateToFolder(const ChannelItem& ch) {
         subPlaylist.name = ch.name;
     }
 
-    // REQUIREMENT 2: Hierarchical navigation stack PUSH
-    // Instantiate new IPTVBrowser for this sub-folder level and push to stack.
-    // Parent IPTVBrowser instance is preserved in screenStack with its exact scroll & selection.
+    // Push new IPTVBrowser instance onto navigation stack
     app->PushScreen(std::make_unique<IPTVBrowser>(app, subPlaylist, ch.name, true));
 }
 
@@ -240,13 +244,133 @@ void IPTVBrowser::HandleInput(u64 kDown, u64 kHeld) {
     if (showPlaylistsView) {
         HandlePlaylistsInput(kDown);
     } else {
-        HandleChannelsInput(kDown);
+        if (focusZone == FocusZone::Sidebar) {
+            HandleSidebarInput(kDown);
+        } else {
+            HandleShelfInput(kDown);
+        }
+    }
+}
+
+void IPTVBrowser::HandleSidebarInput(u64 kDown) {
+    if (kDown & HidNpadButton_AnyUp) {
+        sidebarIndex = (sidebarIndex - 1 + (int)SidebarItem::Count) % (int)SidebarItem::Count;
+    }
+    if (kDown & HidNpadButton_AnyDown) {
+        sidebarIndex = (sidebarIndex + 1) % (int)SidebarItem::Count;
+    }
+    if (kDown & HidNpadButton_AnyRight) {
+        // Move focus back to the poster carousel shelf
+        focusZone = FocusZone::Shelf;
+    }
+
+    if (kDown & HidNpadButton_A) {
+        switch ((SidebarItem)sidebarIndex) {
+            case SidebarItem::Home:
+                showPlaylistsView = true;
+                break;
+            case SidebarItem::IPTV:
+                focusZone = FocusZone::Shelf;
+                break;
+            case SidebarItem::Favorites:
+                // Filter to favorites or cycle group
+                CycleGroup(+1);
+                focusZone = FocusZone::Shelf;
+                break;
+            case SidebarItem::Search:
+                PromptSearch();
+                focusZone = FocusZone::Shelf;
+                break;
+            case SidebarItem::Settings:
+                app->PushScreen(std::make_unique<SettingsScreen>(app));
+                break;
+            default:
+                break;
+        }
+    }
+
+    if (kDown & HidNpadButton_B) {
+        if (isSubFolder) {
+            app->PopScreen();
+        } else {
+            showPlaylistsView = true;
+        }
+    }
+}
+
+void IPTVBrowser::HandleShelfInput(u64 kDown) {
+    int total = (int)displayedChannels.size();
+
+    // Horizontal Carousel Navigation
+    if (kDown & HidNpadButton_AnyLeft) {
+        if (channelIndex > 0) {
+            channelIndex--;
+        } else {
+            // Reached left edge: switch focus to Sidebar rail
+            focusZone = FocusZone::Sidebar;
+        }
+    }
+    if (kDown & HidNpadButton_AnyRight) {
+        if (total > 0 && channelIndex < total - 1) {
+            channelIndex++;
+        }
+    }
+
+    // Jump 5 items with ZR / ZL
+    if (kDown & HidNpadButton_ZR) {
+        if (total > 0) {
+            channelIndex = std::min(total - 1, channelIndex + 5);
+        }
+    }
+    if (kDown & HidNpadButton_ZL) {
+        if (total > 0) {
+            channelIndex = std::max(0, channelIndex - 5);
+        }
+    }
+
+    // Category cycling [L / R]
+    if (kDown & HidNpadButton_R) {
+        CycleGroup(+1);
+    }
+    if (kDown & HidNpadButton_L) {
+        CycleGroup(-1);
+    }
+
+    // Select / Activate Card [A]
+    if (kDown & HidNpadButton_A) {
+        if (total > 0 && channelIndex >= 0 && channelIndex < total) {
+            HandleItemClick(displayedChannels[channelIndex]);
+        }
+    }
+
+    // Toggle Favorite [X]
+    if (kDown & HidNpadButton_X) {
+        if (total > 0 && channelIndex >= 0 && channelIndex < total) {
+            const auto& ch = displayedChannels[channelIndex];
+            bool added = FavoritesManager::Instance().ToggleFavorite(ch.name, ch.url, ch.groupTitle, ch.type == PlaylistItemType::MediaStream);
+            toast.Show(added ? "Anadido a Favoritos" : "Eliminado de Favoritos", 1.5f);
+        }
+    }
+
+    // Search query [Y]
+    if (kDown & HidNpadButton_Y) {
+        PromptSearch();
+    }
+
+    // Return back [B] — Stack POP vs Show Playlists
+    if (kDown & HidNpadButton_B) {
+        if (isSubFolder) {
+            // Stack POP: returns to parent directory preserving parent scroll & focus
+            app->PopScreen();
+        } else {
+            showPlaylistsView = true;
+        }
     }
 }
 
 void IPTVBrowser::HandlePlaylistsInput(u64 kDown) {
     const auto& saved = PlaylistManager::Instance().GetSaved();
-    int totalItems = 2 + (int)saved.size();  // 0: Add URL, 1: Load SD, 2+: Saved lists
+    int totalItems = 2 + (int)saved.size();
 
     if (kDown & HidNpadButton_AnyDown) {
         playlistIndex = (playlistIndex + 1) % totalItems;
@@ -268,7 +392,6 @@ void IPTVBrowser::HandlePlaylistsInput(u64 kDown) {
         }
     }
 
-    // Delete saved playlist [X]
     if (kDown & HidNpadButton_X) {
         if (playlistIndex >= 2) {
             int savedIdx = playlistIndex - 2;
@@ -278,92 +401,8 @@ void IPTVBrowser::HandlePlaylistsInput(u64 kDown) {
         }
     }
 
-    // Back to Main Menu [B]
     if (kDown & HidNpadButton_B) {
         app->PopScreen();
-    }
-}
-
-void IPTVBrowser::HandleChannelsInput(u64 kDown) {
-    int total = (int)displayedChannels.size();
-
-    // D-Pad / Stick navigation
-    if (kDown & HidNpadButton_AnyDown) {
-        if (total > 0 && channelIndex < total - 1) {
-            channelIndex++;
-            if (channelIndex >= scrollOffset + CHANNELS_PER_PAGE) {
-                scrollOffset = channelIndex - CHANNELS_PER_PAGE + 1;
-            }
-        }
-    }
-    if (kDown & HidNpadButton_AnyUp) {
-        if (total > 0 && channelIndex > 0) {
-            channelIndex--;
-            if (channelIndex < scrollOffset) {
-                scrollOffset = channelIndex;
-            }
-        }
-    }
-
-    // Page Up / Down
-    if (kDown & HidNpadButton_ZR) {
-        if (total > 0) {
-            channelIndex = std::min(total - 1, channelIndex + CHANNELS_PER_PAGE);
-            if (channelIndex >= scrollOffset + CHANNELS_PER_PAGE) {
-                scrollOffset = std::min(std::max(0, total - CHANNELS_PER_PAGE), channelIndex - CHANNELS_PER_PAGE + 1);
-            }
-        }
-    }
-    if (kDown & HidNpadButton_ZL) {
-        if (total > 0) {
-            channelIndex = std::max(0, channelIndex - CHANNELS_PER_PAGE);
-            if (channelIndex < scrollOffset) {
-                scrollOffset = channelIndex;
-            }
-        }
-    }
-
-    // Group cycling [L / R]
-    if (kDown & HidNpadButton_R) {
-        CycleGroup(+1);
-    }
-    if (kDown & HidNpadButton_L) {
-        CycleGroup(-1);
-    }
-
-    // Select / Play Channel or Enter Folder [A]
-    if (kDown & HidNpadButton_A) {
-        if (total > 0 && channelIndex >= 0 && channelIndex < total) {
-            HandleItemClick(displayedChannels[channelIndex]);
-        }
-    }
-
-    // Toggle Favorite [X] (or ZL alternative)
-    if (kDown & HidNpadButton_X) {
-        if (total > 0 && channelIndex >= 0 && channelIndex < total) {
-            const auto& ch = displayedChannels[channelIndex];
-            if (ch.type == PlaylistItemType::MediaStream) {
-                bool added = FavoritesManager::Instance().ToggleFavorite(ch.name, ch.url, ch.groupTitle, true);
-                toast.Show(added ? "Canal anadido a Favoritos" : "Canal quitado de Favoritos", 1.5f);
-            }
-        }
-    }
-
-    // Search query [Y]
-    if (kDown & HidNpadButton_Y) {
-        PromptSearch();
-    }
-
-    // Return back [B] — Stack POP vs Show Playlists
-    if (kDown & HidNpadButton_B) {
-        if (isSubFolder) {
-            // REQUIREMENT 2: Hierarchical navigation stack POP
-            // Pop current sub-folder view, returning to parent directory
-            // without resetting parent playlist or losing scroll offset.
-            app->PopScreen();
-        } else {
-            showPlaylistsView = true;
-        }
     }
 }
 
@@ -372,9 +411,9 @@ void IPTVBrowser::HandleChannelsInput(u64 kDown) {
 // ============================================================================
 
 void IPTVBrowser::HandleTouch(const TouchEvent& touch) {
-    if (touch.type != TouchEvent::Down) return;
-
     if (showPlaylistsView) {
+        if (touch.type != TouchEvent::Down) return;
+
         // Back button
         if (touch.x >= Layout::MARGIN && touch.x <= Layout::MARGIN + 120 &&
             touch.y >= 30 && touch.y <= 85) {
@@ -404,58 +443,371 @@ void IPTVBrowser::HandleTouch(const TouchEvent& touch) {
                 return;
             }
         }
-    } else {
-        // Back button (Subfolder POP vs Root Playlist View)
-        if (touch.x >= Layout::MARGIN && touch.x <= Layout::MARGIN + 120 &&
-            touch.y >= 30 && touch.y <= 85) {
-            if (isSubFolder) {
-                app->PopScreen();
-            } else {
-                showPlaylistsView = true;
+        return;
+    }
+
+    // Touch on Sidebar Rail (X: 0 to SIDEBAR_W)
+    if (touch.x < SIDEBAR_W) {
+        if (touch.type != TouchEvent::Down) return;
+        int btnH = 80;
+        int startY = 90;
+        for (int i = 0; i < (int)SidebarItem::Count; i++) {
+            int y = startY + i * btnH;
+            if (touch.y >= y && touch.y <= y + btnH) {
+                sidebarIndex = i;
+                focusZone = FocusZone::Sidebar;
+                if (i == 0) showPlaylistsView = true;
+                else if (i == 1) focusZone = FocusZone::Shelf;
+                else if (i == 2) { CycleGroup(+1); focusZone = FocusZone::Shelf; }
+                else if (i == 3) { PromptSearch(); focusZone = FocusZone::Shelf; }
+                else if (i == 4) app->PushScreen(std::make_unique<SettingsScreen>(app));
+                return;
             }
+        }
+        return;
+    }
+
+    // Touch on Header
+    if (touch.y <= 74) {
+        if (touch.type != TouchEvent::Down) return;
+
+        // Back button
+        if (touch.x >= SIDEBAR_W + 10 && touch.x <= SIDEBAR_W + 110) {
+            if (isSubFolder) app->PopScreen();
+            else showPlaylistsView = true;
             return;
         }
 
         // Category filter tap (cycle next)
-        int catBtnX = Layout::SCREEN_W - Layout::MARGIN - 220;
-        if (touch.x >= catBtnX && touch.x <= catBtnX + 220 &&
-            touch.y >= 30 && touch.y <= 85) {
+        int catBtnX = Layout::SCREEN_W - 240;
+        if (touch.x >= catBtnX && touch.x <= catBtnX + 220) {
             CycleGroup(+1);
             return;
         }
+        return;
+    }
 
-        // Tap on item in list (media stream or folder container)
-        int listStartY = 96;
-        for (int row = 0; row < CHANNELS_PER_PAGE; row++) {
-            int idx = scrollOffset + row;
-            if (idx >= (int)displayedChannels.size()) break;
-
-            int y = listStartY + row * (ITEM_H + ITEM_GAP);
-            if (touch.x >= Layout::MARGIN && touch.x <= Layout::SCREEN_W - Layout::MARGIN &&
-                touch.y >= y && touch.y <= y + ITEM_H) {
-                channelIndex = idx;
-                HandleItemClick(displayedChannels[idx]);
-                return;
+    // Touch on Horizontal Carousel Shelf (Y: SHELF_Y to SHELF_Y + SHELF_H)
+    if (touch.y >= SHELF_Y && touch.y <= SHELF_Y + SHELF_H) {
+        if (touch.type == TouchEvent::Down) {
+            isDraggingShelf = true;
+            dragStartX = touch.x;
+            dragStartScrollX = currentScrollX;
+        } else if (touch.type == TouchEvent::Motion && isDraggingShelf) {
+            int deltaX = touch.x - dragStartX;
+            currentScrollX = dragStartScrollX - deltaX;
+            if (currentScrollX < 0) currentScrollX = 0;
+        } else if (touch.type == TouchEvent::Up && isDraggingShelf) {
+            isDraggingShelf = false;
+            int deltaX = touch.x - dragStartX;
+            if (std::abs(deltaX) < 16) {
+                // Treated as a tap on a poster card
+                int shelfStartX = SIDEBAR_W + 20;
+                int total = (int)displayedChannels.size();
+                for (int i = 0; i < total; i++) {
+                    int cardX = (int)(shelfStartX + i * (POSTER_W + POSTER_GAP) - currentScrollX);
+                    if (touch.x >= cardX && touch.x <= cardX + POSTER_W) {
+                        if (channelIndex == i) {
+                            HandleItemClick(displayedChannels[i]);
+                        } else {
+                            channelIndex = i;
+                            focusZone = FocusZone::Shelf;
+                        }
+                        return;
+                    }
+                }
             }
         }
     }
 }
 
+// ============================================================================
+// Update
+// ============================================================================
+
 void IPTVBrowser::Update(float dt) {
     toast.Update(dt);
+
+    int total = (int)displayedChannels.size();
+    if (total > 0 && !isDraggingShelf) {
+        int shelfStartX = SIDEBAR_W + 20;
+        int viewportW = Layout::SCREEN_W - shelfStartX;
+
+        // Auto-center target scroll on the focused poster
+        targetScrollX = channelIndex * (POSTER_W + POSTER_GAP) - (viewportW / 2 - POSTER_W / 2);
+        if (targetScrollX < 0) targetScrollX = 0;
+
+        float maxScroll = std::max(0, (total * (POSTER_W + POSTER_GAP)) - viewportW + 60);
+        if (targetScrollX > maxScroll) targetScrollX = maxScroll;
+
+        // Smooth critically damped lerp
+        currentScrollX += (targetScrollX - currentScrollX) * std::min(1.0f, 15.0f * dt);
+    }
 }
+
+// ============================================================================
+// Render
+// ============================================================================
 
 void IPTVBrowser::Render(SDL_Renderer* renderer) {
     if (showPlaylistsView) {
         RenderPlaylistsView(renderer);
     } else {
-        RenderChannelsView(renderer);
+        RenderSidebar(renderer);
+        RenderShelfView(renderer);
     }
     toast.Render(renderer, app->GetFontSmall());
 }
 
 // ============================================================================
-// Render: Playlists View
+// Render: Sidebar Navigation Rail (Minimum 64x64 dp touch target)
+// ============================================================================
+
+void IPTVBrowser::RenderSidebar(SDL_Renderer* renderer) {
+    // Sidebar background panel
+    UI::DrawRect(renderer, 0, 0, SIDEBAR_W, Layout::SCREEN_H, Colors::BG_CARD);
+    UI::DrawDivider(renderer, SIDEBAR_W - 1, 0, 1); // Vertical separator
+
+    // Logo / Brand Icon at top
+    UI::DrawRoundedRect(renderer, 24, 20, 48, 48, 12, Colors::DANGO_PINK);
+    UI::DrawText(renderer, app->GetFontLarge(), "🍡", 32, 26, Colors::TEXT_PRIMARY, false, false);
+
+    struct NavItem {
+        const char* icon;
+        const char* label;
+        SidebarItem item;
+    };
+
+    static const NavItem navItems[5] = {
+        {"🏠", "Inicio",   SidebarItem::Home},
+        {"📺", "IPTV",     SidebarItem::IPTV},
+        {"⭐", "Favoritos",SidebarItem::Favorites},
+        {"🔍", "Buscar",   SidebarItem::Search},
+        {"⚙", "Ajustes",  SidebarItem::Settings}
+    };
+
+    int startY = 100;
+    int btnH = 80;
+    int btnW = 76;
+    int btnX = 10;
+
+    for (int i = 0; i < 5; i++) {
+        int y = startY + i * btnH;
+        bool isFocused = (focusZone == FocusZone::Sidebar && sidebarIndex == i);
+        bool isActive = (!isFocused && sidebarIndex == i);
+
+        // Focus & active button styling
+        if (isFocused) {
+            UI::DrawRoundedRect(renderer, btnX, y, btnW, 68, 14, Colors::BG_SELECTED);
+            // Glowing border
+            UI::DrawRoundedRect(renderer, btnX, y, 4, 68, 2, Colors::DANGO_PINK);
+        } else if (isActive) {
+            UI::DrawRoundedRect(renderer, 0, y + 14, 4, 40, 2, Colors::DANGO_PINK);
+        }
+
+        SDL_Color textCol = (isFocused || isActive) ? Colors::TEXT_PRIMARY : Colors::TEXT_DISABLED;
+
+        // Large icon
+        UI::DrawTextCentered(renderer, app->GetFont(), navItems[i].icon,
+                             {btnX, y + 10, btnW, 28}, textCol);
+
+        // Compact title under icon
+        UI::DrawTextCentered(renderer, app->GetFontTiny(), navItems[i].label,
+                             {btnX, y + 42, btnW, 20}, textCol);
+    }
+}
+
+// ============================================================================
+// Render: Single-Row Horizontal Carousel / Shelf View
+// ============================================================================
+
+void IPTVBrowser::RenderShelfView(SDL_Renderer* renderer) {
+    const auto& pl = GetActivePlaylist();
+    int headerX = SIDEBAR_W + 20;
+    int headerY = 24;
+
+    // Back Button [B]
+    UI::DrawRoundedRect(renderer, headerX, headerY, 90, 44, 8, Colors::BG_CARD);
+    UI::DrawRoundedRect(renderer, headerX + 8, headerY + 10, 24, 24, 6, Colors::DANGO_PINK);
+    UI::DrawText(renderer, app->GetFontTiny(), "B",
+                 headerX + 20, headerY + 13, Colors::TEXT_PRIMARY, true, false);
+    UI::DrawText(renderer, app->GetFontSmall(), isSubFolder ? "Atras" : "Listas",
+                 headerX + 38, headerY + 12, Colors::TEXT_SECONDARY, false, false);
+
+    // Title / Breadcrumbs
+    std::string plTitle = pl.name;
+    if (isSubFolder && !folderTitle.empty()) {
+        plTitle = "📁 " + folderTitle;
+    }
+    UI::DrawText(renderer, app->GetFont(), StringUtils::Truncate(plTitle, 36),
+                 headerX + 110, headerY + 10, Colors::DANGO_CREAM, false, false);
+
+    // Category Selector pill on right
+    int catBtnX = Layout::SCREEN_W - 250;
+    UI::DrawRoundedRect(renderer, catBtnX, headerY, 230, 44, 8, Colors::BG_CARD);
+
+    std::string curGroup = (groupIndex < (int)pl.groups.size()) ? pl.groups[groupIndex] : "Todos";
+    std::string groupLabel = "L < " + StringUtils::Truncate(curGroup, 12) + " > R";
+    UI::DrawTextCentered(renderer, app->GetFontSmall(), groupLabel,
+                         {catBtnX, headerY, 230, 44}, Colors::DANGO_PINK);
+
+    UI::DrawDivider(renderer, headerX, 80, Layout::SCREEN_W - headerX - 20);
+
+    // ------------------------------------------------------------------------
+    // Horizontal Poster Shelf (Virtualization + Lazy Texture Loading)
+    // ------------------------------------------------------------------------
+    int total = (int)displayedChannels.size();
+    int shelfStartX = headerX;
+    int shelfY = SHELF_Y;
+    int viewportW = Layout::SCREEN_W - shelfStartX;
+
+    if (total == 0) {
+        UI::DrawText(renderer, app->GetFont(), "No se encontraron elementos en esta seccion",
+                     Layout::SCREEN_W / 2 + 30, 300, Colors::TEXT_DISABLED, true, false);
+    } else {
+        for (int i = 0; i < total; i++) {
+            int cardX = (int)(shelfStartX + i * (POSTER_W + POSTER_GAP) - currentScrollX);
+
+            // Virtualization culling: skip posters strictly outside the screen
+            if (cardX + POSTER_W < shelfStartX - 40 || cardX > Layout::SCREEN_W + 40) {
+                continue;
+            }
+
+            bool isFocused = (focusZone == FocusZone::Shelf && i == channelIndex);
+            int cardW = isFocused ? POSTER_FOCUSED_W : POSTER_W;
+            int cardH = isFocused ? POSTER_FOCUSED_H : POSTER_H;
+            int cardY = isFocused ? (shelfY - (POSTER_FOCUSED_H - POSTER_H) / 2) : shelfY;
+
+            RenderPosterCard(renderer, displayedChannels[i], i, cardX, cardY, cardW, cardH, isFocused);
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Active Item Detail & Footer Area
+    // ------------------------------------------------------------------------
+    int detailY = 490;
+    UI::DrawDivider(renderer, headerX, detailY, Layout::SCREEN_W - headerX - 20);
+
+    if (total > 0 && channelIndex >= 0 && channelIndex < total) {
+        const auto& ch = displayedChannels[channelIndex];
+        bool isContainer = (ch.type == PlaylistItemType::FolderContainer);
+
+        // Big Item Title
+        std::string titleStr = isContainer ? ("📁 " + ch.name) : ch.name;
+        UI::DrawText(renderer, app->GetFontLarge(), StringUtils::Truncate(titleStr, 50),
+                     headerX, detailY + 16, Colors::TEXT_PRIMARY, false, false);
+
+        // Item Subtitle / Category
+        std::string subInfo = isContainer ? ("[Carpeta / Categoria] " + ch.groupTitle) : ("[Video] " + ch.groupTitle);
+        UI::DrawText(renderer, app->GetFontSmall(), subInfo,
+                     headerX, detailY + 54, Colors::DANGO_PINK, false, false);
+
+        // URL / Source Preview
+        UI::DrawText(renderer, app->GetFontTiny(), StringUtils::Truncate(ch.url, 80),
+                     headerX, detailY + 80, Colors::TEXT_DISABLED, false, false);
+
+        // Controller Action Buttons
+        int hintY = detailY + 112;
+
+        // [A] Button
+        UI::DrawRoundedRect(renderer, headerX, hintY, 26, 26, 6, Colors::DANGO_PINK);
+        UI::DrawText(renderer, app->GetFontTiny(), "A", headerX + 13, hintY + 5, Colors::TEXT_PRIMARY, true, false);
+
+        const char* aAction = isContainer ? "Abrir carpeta" : "Reproducir";
+        UI::DrawText(renderer, app->GetFontSmall(), aAction, headerX + 32, hintY + 2, Colors::TEXT_PRIMARY, false, false);
+
+        // [X] Favorite
+        int xFavX = headerX + 170;
+        UI::DrawRoundedRect(renderer, xFavX, hintY, 26, 26, 6, Colors::DANGO_ORANGE);
+        UI::DrawText(renderer, app->GetFontTiny(), "X", xFavX + 13, hintY + 5, Colors::TEXT_PRIMARY, true, false);
+        UI::DrawText(renderer, app->GetFontSmall(), "Favorito", xFavX + 32, hintY + 2, Colors::TEXT_SECONDARY, false, false);
+
+        // [Y] Search
+        int ySearchX = headerX + 290;
+        UI::DrawRoundedRect(renderer, ySearchX, hintY, 26, 26, 6, Colors::DANGO_CREAM);
+        UI::DrawText(renderer, app->GetFontTiny(), "Y", ySearchX + 13, hintY + 5, Colors::BG_DARK, true, false);
+        UI::DrawText(renderer, app->GetFontSmall(), "Buscar", ySearchX + 32, hintY + 2, Colors::TEXT_SECONDARY, false, false);
+
+        // Item Counter on the right
+        char countBuf[64];
+        snprintf(countBuf, sizeof(countBuf), "%d / %d", channelIndex + 1, total);
+        UI::DrawText(renderer, app->GetFontSmall(), countBuf,
+                     Layout::SCREEN_W - 40, hintY + 2, Colors::TEXT_DISABLED, true, false);
+    }
+}
+
+// ============================================================================
+// Render: Poster Card (2:3 aspect ratio, with lazy texture loading)
+// ============================================================================
+
+void IPTVBrowser::RenderPosterCard(SDL_Renderer* renderer, const ChannelItem& ch, int index,
+                                   int x, int y, int w, int h, bool isFocused) {
+    (void)index;
+    bool isContainer = (ch.type == PlaylistItemType::FolderContainer);
+
+    // Active Highlight: glowing outer border and elevation
+    if (isFocused) {
+        SDL_Color glowCol = isContainer ? Colors::DANGO_ORANGE : Colors::DANGO_PINK;
+        UI::DrawRoundedRect(renderer, x - 4, y - 4, w + 8, h + 8, 14, glowCol);
+    }
+
+    // Card background
+    SDL_Color cardBg = isFocused ? Colors::BG_SELECTED : Colors::BG_CARD;
+    UI::DrawRoundedRect(renderer, x, y, w, h, 10, cardBg);
+
+    // Try loading / retrieving poster image from TextureCache
+    SDL_Texture* posterTex = nullptr;
+    if (!ch.logoUrl.empty()) {
+        posterTex = TextureCache::Instance().GetTexture(renderer, ch.logoUrl);
+    }
+
+    if (posterTex) {
+        // Draw the cached poster image (fills the 2:3 card)
+        SDL_Rect dst{x + 2, y + 2, w - 4, h - 4};
+        SDL_RenderCopy(renderer, posterTex, NULL, &dst);
+    } else {
+        // High-end placeholder card
+        UI::DrawRoundedRect(renderer, x + 6, y + 6, w - 12, h - 60, 8, Colors::BG_DARK);
+
+        // Centered big icon
+        const char* icon = isContainer ? "📁" : "🎬";
+        UI::DrawTextCentered(renderer, app->GetFontLarge(), icon,
+                             {x + 6, y + h / 3 - 30, w - 12, 50}, Colors::DANGO_CREAM);
+
+        // Poster title inside placeholder
+        UI::DrawTextCentered(renderer, app->GetFontSmall(), StringUtils::Truncate(ch.name, 22),
+                             {x + 8, y + h / 2 + 10, w - 16, 40}, Colors::TEXT_PRIMARY);
+    }
+
+    // Badge on Top Right
+    int badgeW = 48;
+    int badgeH = 26;
+    int badgeX = x + w - badgeW - 8;
+    int badgeY = y + 8;
+
+    if (isContainer) {
+        UI::DrawRoundedRect(renderer, badgeX, badgeY, badgeW, badgeH, 6, Colors::DANGO_ORANGE);
+        UI::DrawTextCentered(renderer, app->GetFontTiny(), "DIR", {badgeX, badgeY, badgeW, badgeH}, Colors::TEXT_PRIMARY);
+    } else {
+        std::string extLower = StringUtils::ToLower(StringUtils::GetExtension(ch.url));
+        bool isVod = (extLower == ".mp4" || extLower == ".mkv" || extLower == ".avi");
+        SDL_Color bColor = isVod ? Colors::DANGO_PINK : Colors::DANGO_GREEN;
+        const char* bText = isVod ? "VOD" : "LIVE";
+
+        UI::DrawRoundedRect(renderer, badgeX, badgeY, badgeW, badgeH, 6, bColor);
+        UI::DrawTextCentered(renderer, app->GetFontTiny(), bText, {badgeX, badgeY, badgeW, badgeH}, Colors::BG_DARK);
+    }
+
+    // Bottom title bar under poster image
+    UI::DrawRoundedRect(renderer, x, y + h - 46, w, 46, 8, Colors::BG_CARD);
+    UI::DrawTextCentered(renderer, app->GetFontSmall(), StringUtils::Truncate(ch.name, 18),
+                         {x + 6, y + h - 42, w - 12, 22}, isFocused ? Colors::TEXT_PRIMARY : Colors::TEXT_SECONDARY);
+    UI::DrawTextCentered(renderer, app->GetFontTiny(), StringUtils::Truncate(ch.groupTitle, 16),
+                         {x + 6, y + h - 22, w - 12, 18}, Colors::TEXT_DISABLED);
+}
+
+// ============================================================================
+// Render: Playlists View (Root View)
 // ============================================================================
 
 void IPTVBrowser::RenderPlaylistsView(SDL_Renderer* renderer) {
@@ -469,7 +821,7 @@ void IPTVBrowser::RenderPlaylistsView(SDL_Renderer* renderer) {
     UI::DrawText(renderer, app->GetFontSmall(), "Menu",
                  Layout::MARGIN + 38, headerY + 12, Colors::TEXT_SECONDARY, false, false);
 
-    UI::DrawText(renderer, app->GetFontLarge(), "Listas IPTV",
+    UI::DrawText(renderer, app->GetFontLarge(), "Listas IPTV & Streaming",
                  Layout::MARGIN + 100, headerY + 4, Colors::DANGO_CREAM, false, false);
 
     UI::DrawDivider(renderer, Layout::MARGIN, 84, Layout::SCREEN_W - Layout::MARGIN * 2);
@@ -525,120 +877,4 @@ void IPTVBrowser::RenderPlaylistsView(SDL_Renderer* renderer) {
     UI::DrawRoundedRect(renderer, xX, hintY, 26, 26, 6, Colors::DANGO_ORANGE);
     UI::DrawText(renderer, app->GetFontTiny(), "X", xX + 13, hintY + 5, Colors::TEXT_PRIMARY, true, false);
     UI::DrawText(renderer, app->GetFontSmall(), "Eliminar guardada", xX + 32, hintY + 2, Colors::TEXT_SECONDARY, false, false);
-}
-
-// ============================================================================
-// Render: Channels / Folder Directory View
-// ============================================================================
-
-void IPTVBrowser::RenderChannelsView(SDL_Renderer* renderer) {
-    const auto& pl = GetActivePlaylist();
-    int headerY = 28;
-
-    // Back Button [B]
-    UI::DrawRoundedRect(renderer, Layout::MARGIN, headerY, 80, 44, 8, Colors::BG_CARD);
-    UI::DrawRoundedRect(renderer, Layout::MARGIN + 8, headerY + 10, 24, 24, 6, Colors::DANGO_PINK);
-    UI::DrawText(renderer, app->GetFontTiny(), "B",
-                 Layout::MARGIN + 20, headerY + 13, Colors::TEXT_PRIMARY, true, false);
-    UI::DrawText(renderer, app->GetFontSmall(), isSubFolder ? "Atras" : "Listas",
-                 Layout::MARGIN + 38, headerY + 12, Colors::TEXT_SECONDARY, false, false);
-
-    // Playlist / Directory Title
-    std::string plTitle = StringUtils::Truncate(pl.name, 30);
-    if (isSubFolder && !folderTitle.empty()) {
-        plTitle = "📁 " + StringUtils::Truncate(folderTitle, 28);
-    }
-    UI::DrawText(renderer, app->GetFont(), plTitle,
-                 Layout::MARGIN + 100, headerY + 10, Colors::DANGO_CREAM, false, false);
-
-    // Category Selector pill on right
-    int catBtnX = Layout::SCREEN_W - Layout::MARGIN - 240;
-    UI::DrawRoundedRect(renderer, catBtnX, headerY, 240, 44, 8, Colors::BG_CARD);
-
-    std::string curGroup = (groupIndex < (int)pl.groups.size()) ? pl.groups[groupIndex] : "Todos";
-    std::string groupLabel = "L <  " + StringUtils::Truncate(curGroup, 14) + "  > R";
-    UI::DrawTextCentered(renderer, app->GetFontSmall(), groupLabel,
-                         {catBtnX, headerY, 240, 44}, Colors::DANGO_PINK);
-
-    UI::DrawDivider(renderer, Layout::MARGIN, 84, Layout::SCREEN_W - Layout::MARGIN * 2);
-
-    // Channels / Folders List
-    int listStartY = 96;
-    int listX = Layout::MARGIN;
-    int listW = Layout::SCREEN_W - Layout::MARGIN * 2 - 20;
-    int total = (int)displayedChannels.size();
-
-    if (total == 0) {
-        UI::DrawText(renderer, app->GetFont(), "No se encontraron elementos en este grupo",
-                     Layout::SCREEN_W / 2, 320, Colors::TEXT_DISABLED, true, false);
-    } else {
-        int firstIndex = std::max(0, scrollOffset);
-        int lastIndex = std::min(total - 1, scrollOffset + CHANNELS_PER_PAGE - 1);
-
-        for (int i = firstIndex; i <= lastIndex; i++) {
-            int row = i - scrollOffset;
-            int itemY = listStartY + row * (ITEM_H + ITEM_GAP);
-            bool isSel = (i == channelIndex);
-
-            SDL_Color cardBg = isSel ? Colors::BG_SELECTED : Colors::BG_CARD;
-            UI::DrawRoundedRect(renderer, listX, itemY, listW, ITEM_H, Layout::CORNER_RADIUS, cardBg);
-
-            if (isSel) {
-                UI::DrawRoundedRect(renderer, listX, itemY, 4, ITEM_H, 2, Colors::DANGO_PINK);
-            }
-
-            const auto& ch = displayedChannels[i];
-            bool isContainer = (ch.type == PlaylistItemType::FolderContainer);
-
-            // Badge: Orange DIR for folder containers, Green LIVE for media streams
-            if (isContainer) {
-                UI::DrawRoundedRect(renderer, listX + 16, itemY + 16, 48, 36, 6, Colors::DANGO_ORANGE);
-                UI::DrawText(renderer, app->GetFontTiny(), "DIR", listX + 40, itemY + 26, Colors::TEXT_PRIMARY, true, false);
-            } else {
-                UI::DrawRoundedRect(renderer, listX + 16, itemY + 16, 48, 36, 6, Colors::DANGO_GREEN);
-                UI::DrawText(renderer, app->GetFontTiny(), "LIVE", listX + 40, itemY + 26, Colors::BG_DARK, true, false);
-            }
-
-            // Name (prefixed with folder icon if container)
-            SDL_Color textCol = isSel ? Colors::TEXT_PRIMARY : Colors::TEXT_SECONDARY;
-            std::string displayName = isContainer ? ("📁 " + ch.name) : ch.name;
-            UI::DrawText(renderer, app->GetFont(), StringUtils::Truncate(displayName, 48),
-                         listX + 76, itemY + 12, textCol, false, false);
-
-            // Subtitle: group and category type
-            std::string subTitle = isContainer ? ("[Carpeta] " + ch.groupTitle) : ch.groupTitle;
-            UI::DrawText(renderer, app->GetFontTiny(), subTitle,
-                         listX + 76, itemY + 40, Colors::TEXT_DISABLED, false, false);
-        }
-    }
-
-    // Footer hints
-    int footerY = Layout::SCREEN_H - Layout::FOOTER_H - 10;
-    UI::DrawDivider(renderer, Layout::MARGIN, footerY, Layout::SCREEN_W - Layout::MARGIN * 2);
-
-    int hintY = footerY + 14;
-    UI::DrawRoundedRect(renderer, Layout::MARGIN, hintY, 26, 26, 6, Colors::DANGO_PINK);
-    UI::DrawText(renderer, app->GetFontTiny(), "A", Layout::MARGIN + 13, hintY + 5, Colors::TEXT_PRIMARY, true, false);
-
-    bool hoveringFolder = (total > 0 && channelIndex >= 0 && channelIndex < total &&
-                           displayedChannels[channelIndex].type == PlaylistItemType::FolderContainer);
-    UI::DrawText(renderer, app->GetFontSmall(), hoveringFolder ? "Abrir carpeta" : "Ver Canal",
-                 Layout::MARGIN + 32, hintY + 2, Colors::TEXT_SECONDARY, false, false);
-
-    int yX = Layout::MARGIN + 180;
-    UI::DrawRoundedRect(renderer, yX, hintY, 26, 26, 6, Colors::DANGO_CREAM);
-    UI::DrawText(renderer, app->GetFontTiny(), "Y", yX + 13, hintY + 5, Colors::BG_DARK, true, false);
-    UI::DrawText(renderer, app->GetFontSmall(), "Buscar", yX + 32, hintY + 2, Colors::TEXT_SECONDARY, false, false);
-
-    int xFavX = Layout::MARGIN + 300;
-    UI::DrawRoundedRect(renderer, xFavX, hintY, 26, 26, 6, Colors::DANGO_ORANGE);
-    UI::DrawText(renderer, app->GetFontTiny(), "X", xFavX + 13, hintY + 5, Colors::TEXT_PRIMARY, true, false);
-    UI::DrawText(renderer, app->GetFontSmall(), "Favorito", xFavX + 32, hintY + 2, Colors::TEXT_SECONDARY, false, false);
-
-    // Item Counter
-    char countBuf[64];
-    snprintf(countBuf, sizeof(countBuf), "%d / %d elementos",
-             total > 0 ? channelIndex + 1 : 0, total);
-    UI::DrawText(renderer, app->GetFontSmall(), countBuf,
-                 Layout::SCREEN_W - Layout::MARGIN - 10, hintY + 2, Colors::TEXT_DISABLED, false, false);
 }

@@ -41,13 +41,16 @@ bool MediaPlayer::Initialize() {
     }
 
     // Hardware decoding configuration (Tegra X1 NVDEC)
-    mpv_set_option_string(mpv, "hwdec", "auto");
+    mpv_set_option_string(mpv, "hwdec", "auto-safe");
     mpv_set_option_string(mpv, "vo", "gpu");
     mpv_set_option_string(mpv, "gpu-context", "auto");
+    mpv_set_option_string(mpv, "user-agent", "Mozilla/5.0 (Nintendo Switch; DangoPlayer/1.0)");
+    mpv_set_option_string(mpv, "tls-verify", "no");
 
     // Cache / buffer settings optimized for Switch RAM
     mpv_set_option_string(mpv, "demuxer-max-bytes", "32MiB");
     mpv_set_option_string(mpv, "demuxer-max-back-bytes", "16MiB");
+    mpv_set_option_string(mpv, "network-timeout", "15");
 
     // Audio & Subtitle configuration
     mpv_set_option_string(mpv, "sub-auto", "fuzzy");
@@ -98,16 +101,28 @@ bool MediaPlayer::Open(const std::string& path) {
 
     Stop();
 
+    // Sanitize spaces in URL
+    std::string safePath = (path.rfind("http://", 0) == 0 || path.rfind("https://", 0) == 0)
+                          ? StringUtils::ToLower(path.substr(0, 7)) == "http://" || StringUtils::ToLower(path.substr(0, 8)) == "https://"
+                            ? path : path
+                          : path;
+    // Replace unencoded spaces
+    size_t sPos = 0;
+    while ((sPos = safePath.find(' ', sPos)) != std::string::npos) {
+        safePath.replace(sPos, 1, "%20");
+        sPos += 3;
+    }
+
     metadata = MediaMetadata();
-    metadata.path = path;
+    metadata.path = safePath;
     metadata.title = StringUtils::GetFilename(path);
     position = 0.0;
     duration = 0.0;
     status = PlayerStatus::Loading;
 
-    Logger::Info("MediaPlayer: Loading file: %s", path.c_str());
+    Logger::Info("MediaPlayer: Loading file: %s", safePath.c_str());
 
-    const char* cmd[] = {"loadfile", path.c_str(), "replace", nullptr};
+    const char* cmd[] = {"loadfile", safePath.c_str(), "replace", nullptr};
     int res = mpv_command(mpv, cmd);
     if (res < 0) {
         Logger::Error("MediaPlayer: loadfile failed: %s", mpv_error_string(res));
@@ -333,10 +348,17 @@ void MediaPlayer::Update() {
             }
 
             case MPV_EVENT_END_FILE: {
-                Logger::Info("MediaPlayer: Event End of File reached");
-                status = PlayerStatus::Ended;
-                if (onEndedCallback) {
-                    onEndedCallback();
+                mpv_event_end_file* end_file = (mpv_event_end_file*)event->data;
+                if (end_file && end_file->reason == MPV_END_FILE_REASON_ERROR) {
+                    Logger::Error("MediaPlayer: Playback error (%d): %s",
+                                  end_file->error, mpv_error_string(end_file->error));
+                    status = PlayerStatus::Error;
+                } else {
+                    Logger::Info("MediaPlayer: Event End of File reached");
+                    status = PlayerStatus::Ended;
+                    if (onEndedCallback) {
+                        onEndedCallback();
+                    }
                 }
                 break;
             }

@@ -25,4 +25,6 @@ public:
 private:
     std::string mediaPath;
     PlayerOverlay overlay;
+    bool hasShownError = false;
+    float errorTimer = 2.5f;
 };

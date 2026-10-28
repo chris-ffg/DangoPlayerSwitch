@@ -74,7 +74,7 @@ bool App::InitSDL() {
         APP_NAME,
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         SCREEN_W, SCREEN_H,
-        SDL_WINDOW_SHOWN
+        SDL_WINDOW_SHOWN | SDL_WINDOW_OPENGL
     );
     if (!window) {
         Logger::Error("SDL_CreateWindow failed: %s", SDL_GetError());

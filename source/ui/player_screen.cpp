@@ -58,12 +58,32 @@ void PlayerScreen::HandleTouch(const TouchEvent& touch) {
 void PlayerScreen::Update(float dt) {
     MediaPlayer::Instance().Update();
     overlay.Update(dt);
+
+    if (MediaPlayer::Instance().GetStatus() == PlayerStatus::Error) {
+        if (!hasShownError) {
+            hasShownError = true;
+            errorTimer = 2.5f;
+        }
+        errorTimer -= dt;
+        if (errorTimer <= 0.0f) {
+            app->PopScreen();
+        }
+    }
 }
 
 void PlayerScreen::Render(SDL_Renderer* renderer) {
     // Clear background to pure black (standard for video)
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
+
+    if (hasShownError) {
+        UI::DrawRoundedRect(renderer, Layout::SCREEN_W / 2 - 250, Layout::SCREEN_H / 2 - 40, 500, 80, 12, Colors::BG_CARD);
+        UI::DrawTextCentered(renderer, app->GetFont(), "Error al reproducir enlace multimedia",
+                             {Layout::SCREEN_W / 2 - 250, Layout::SCREEN_H / 2 - 40, 500, 45}, Colors::DANGO_PINK);
+        UI::DrawTextCentered(renderer, app->GetFontSmall(), "El servidor no responde o el formato no es compatible",
+                             {Layout::SCREEN_W / 2 - 250, Layout::SCREEN_H / 2 + 5, 500, 35}, Colors::TEXT_SECONDARY);
+        return;
+    }
 
     // Overlay HUD
     overlay.Render(renderer);

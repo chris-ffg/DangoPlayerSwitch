@@ -12,15 +12,40 @@
 #include <algorithm>
 
 static std::string ExtractAttribute(const std::string& line, const std::string& attr) {
-    std::string needle = attr + "=\"";
-    size_t start = line.find(needle);
+    // 1. Try double quotes attr="..."
+    std::string needleDouble = attr + "=\"";
+    size_t start = line.find(needleDouble);
     if (start != std::string::npos) {
-        start += needle.length();
+        start += needleDouble.length();
         size_t end = line.find('"', start);
         if (end != std::string::npos) {
             return line.substr(start, end - start);
         }
     }
+
+    // 2. Try single quotes attr='...'
+    std::string needleSingle = attr + "=\'";
+    start = line.find(needleSingle);
+    if (start != std::string::npos) {
+        start += needleSingle.length();
+        size_t end = line.find('\'', start);
+        if (end != std::string::npos) {
+            return line.substr(start, end - start);
+        }
+    }
+
+    // 3. Try case-insensitive attribute match
+    std::string lineLower = StringUtils::ToLower(line);
+    std::string attrLower = StringUtils::ToLower(attr) + "=\"";
+    start = lineLower.find(attrLower);
+    if (start != std::string::npos) {
+        start += attrLower.length();
+        size_t end = line.find('"', start);
+        if (end != std::string::npos) {
+            return line.substr(start, end - start);
+        }
+    }
+
     return "";
 }
 
@@ -239,19 +264,24 @@ bool ParseM3U(const std::string& content, Playlist& outPlaylist, const std::stri
             line = line.substr(3);
         }
 
-        if (line.rfind("#EXTINF:", 0) == 0) {
+        std::string lineHead = (line.length() >= 8) ? StringUtils::ToLower(line.substr(0, 8)) : "";
+        if (lineHead == "#extinf:") {
             currentItem = ChannelItem();
             pendingExtInfLine = line;
             hasPendingItem = true;
 
             // Extract tags
             std::string group = ExtractAttribute(line, "group-title");
+            if (group.empty()) group = ExtractAttribute(line, "group");
             if (!group.empty()) currentItem.groupTitle = group;
 
             std::string logo = ExtractAttribute(line, "tvg-logo");
+            if (logo.empty()) logo = ExtractAttribute(line, "logo");
+            if (logo.empty()) logo = ExtractAttribute(line, "tvg_logo");
             if (!logo.empty()) currentItem.logoUrl = logo;
 
             std::string tvgId = ExtractAttribute(line, "tvg-id");
+            if (tvgId.empty()) tvgId = ExtractAttribute(line, "tvg-name");
             if (!tvgId.empty()) currentItem.tvgId = tvgId;
 
             // Channel name is after the last comma

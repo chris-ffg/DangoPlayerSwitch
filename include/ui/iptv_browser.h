@@ -1,5 +1,5 @@
 // ============================================================================
-// DangoPlayer Switch — IPTV Channel & Playlist Browser
+// DangoPlayer Switch — IPTV Horizontal Shelf & Sidebar Browser
 // ============================================================================
 
 #pragma once
@@ -7,8 +7,24 @@
 #include "ui/screen.h"
 #include "media/playlist_manager.h"
 #include "ui/widgets/toast.h"
+#include "ui/texture_cache.h"
 #include <vector>
 #include <string>
+
+enum class FocusZone {
+    Sidebar,
+    Shelf,
+    Header
+};
+
+enum class SidebarItem {
+    Home = 0,
+    IPTV = 1,
+    Favorites = 2,
+    Search = 3,
+    Settings = 4,
+    Count = 5
+};
 
 class IPTVBrowser : public Screen {
 public:
@@ -26,7 +42,8 @@ public:
 
 private:
     void HandlePlaylistsInput(u64 kDown);
-    void HandleChannelsInput(u64 kDown);
+    void HandleShelfInput(u64 kDown);
+    void HandleSidebarInput(u64 kDown);
     void RefreshChannelList();
     void CycleGroup(int direction);
     void PromptAddUrl();
@@ -39,8 +56,11 @@ private:
     void RenderLoadingFrame(const std::string& message);
     const Playlist& GetActivePlaylist() const;
 
+    // View Renderers
     void RenderPlaylistsView(SDL_Renderer* renderer);
-    void RenderChannelsView(SDL_Renderer* renderer);
+    void RenderSidebar(SDL_Renderer* renderer);
+    void RenderShelfView(SDL_Renderer* renderer);
+    void RenderPosterCard(SDL_Renderer* renderer, const ChannelItem& ch, int index, int x, int y, int w, int h, bool isFocused);
 
     bool isSubFolder = false;
     std::string folderTitle;
@@ -50,15 +70,30 @@ private:
     bool showPlaylistsView = true;
     int playlistIndex = 0;
 
+    FocusZone focusZone = FocusZone::Shelf;
+    int sidebarIndex = 1;  // Default to IPTV
+
     int channelIndex = 0;
-    int scrollOffset = 0;
+    float currentScrollX = 0.0f;
+    float targetScrollX = 0.0f;
     int groupIndex = 0;
     std::string searchQuery;
+
+    // Touch dragging
+    bool isDraggingShelf = false;
+    int dragStartX = 0;
+    float dragStartScrollX = 0.0f;
 
     std::vector<ChannelItem> displayedChannels;
     Toast toast;
 
-    static constexpr int CHANNELS_PER_PAGE = 7;
-    static constexpr int ITEM_H = 68;
-    static constexpr int ITEM_GAP = 6;
+    // Layout constants for 720p / 1080p
+    static constexpr int SIDEBAR_W = 96;
+    static constexpr int POSTER_W = 200;
+    static constexpr int POSTER_H = 300;
+    static constexpr int POSTER_GAP = 22;
+    static constexpr int POSTER_FOCUSED_W = 216;
+    static constexpr int POSTER_FOCUSED_H = 324;
+    static constexpr int SHELF_Y = 100;
+    static constexpr int SHELF_H = 380;
 };
