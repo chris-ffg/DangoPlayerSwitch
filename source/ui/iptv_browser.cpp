@@ -13,6 +13,7 @@
 #include "utils/string_utils.h"
 #include "utils/logger.h"
 #include <algorithm>
+#include <set>
 #include <cstdio>
 
 // Root Browser Constructor

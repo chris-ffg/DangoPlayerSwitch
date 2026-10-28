@@ -188,8 +188,6 @@ void FileBrowser::HandleItemSelection(int index) {
 void FileBrowser::HandleTouch(const TouchEvent& touch) {
     int listStartY = 110;
     int listEndY = Layout::SCREEN_H - Layout::FOOTER_H - 10;
-    int listX = Layout::MARGIN;
-    int listW = Layout::SCREEN_W - Layout::MARGIN * 2 - 20;
 
     // Header Back button touch
     if (touch.type == TouchEvent::Down) {
