@@ -49,7 +49,7 @@ LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*
 #---------------------------------------------------------------------------------
 LIBS	:=	-Wl,--start-group \
 			-lmpv -lavfilter -lavformat -lavcodec -lavutil -lswscale -lswresample \
-			-lplacebo -llua51 -lass -lfribidi -ldav1d \
+			-lplacebo -llua -lass -lfribidi -ldav1d \
 			-lcurl -lmbedtls -lmbedcrypto -lmbedx509 \
 			-lSDL2_ttf -lSDL2_image -lSDL2_gfx -lSDL2_mixer \
 			-lSDL2 -lglad -lEGL -lGLESv2 -lglapi -ldrm_nouveau \
