@@ -39,13 +39,13 @@ void HistoryManager::Load() {
             item.pathOrUrl = path;
 
             if (std::getline(ss, posStr, '|')) {
-                try { item.lastPosition = std::stod(posStr); } catch (...) {}
+                item.lastPosition = strtod(posStr.c_str(), nullptr);
             }
             if (std::getline(ss, durStr, '|')) {
-                try { item.duration = std::stod(durStr); } catch (...) {}
+                item.duration = strtod(durStr.c_str(), nullptr);
             }
             if (std::getline(ss, timeStr, '|')) {
-                try { item.timestamp = std::stoull(timeStr); } catch (...) {}
+                item.timestamp = strtoull(timeStr.c_str(), nullptr, 10);
             }
             if (std::getline(ss, streamStr, '|')) {
                 item.isStream = (streamStr == "1");

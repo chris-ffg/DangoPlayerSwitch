@@ -384,11 +384,7 @@ double MediaPlayer::GetResumePosition(const std::string& path) {
         if (eq != std::string::npos) {
             std::string p = line.substr(0, eq);
             if (p == path) {
-                try {
-                    return std::stod(line.substr(eq + 1));
-                } catch (...) {
-                    return 0.0;
-                }
+                return strtod(line.substr(eq + 1).c_str(), nullptr);
             }
         }
     }
@@ -407,9 +403,7 @@ void MediaPlayer::SaveResumePosition(const std::string& path, double pos) {
             size_t eq = line.find('=');
             if (eq != std::string::npos) {
                 std::string p = line.substr(0, eq);
-                try {
-                    entries[p] = std::stod(line.substr(eq + 1));
-                } catch (...) {}
+                entries[p] = strtod(line.substr(eq + 1).c_str(), nullptr);
             }
         }
         inFile.close();
