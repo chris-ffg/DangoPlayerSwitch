@@ -116,9 +116,10 @@ PlaylistItemType DetectItemType(const std::string& extInfLine, const std::string
 
     // 7. Passion Wii Streaming specific domain detection
     // In PassionWii, all category and sub-playlist endpoints are hosted on
-    // passionstreamingwii / myartsonline and do not have video file extensions.
+    // passionstreamingwii / myartsonline / listas-iptv-wii and do not have video file extensions.
     if (urlLower.find("passionstreamingwii") != std::string::npos ||
-        urlLower.find("myartsonline.com") != std::string::npos) {
+        urlLower.find("myartsonline.com") != std::string::npos ||
+        urlLower.find("listas-iptv-wii") != std::string::npos) {
         return PlaylistItemType::FolderContainer;
     }
 

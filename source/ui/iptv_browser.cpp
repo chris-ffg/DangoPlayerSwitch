@@ -160,7 +160,8 @@ bool IPTVBrowser::MightBeSubPlaylist(const ChannelItem& ch) const {
 
     // Passion Wii Streaming endpoints are always folders
     if (urlLower.find("passionstreamingwii") != std::string::npos ||
-        urlLower.find("myartsonline.com") != std::string::npos) {
+        urlLower.find("myartsonline.com") != std::string::npos ||
+        urlLower.find("listas-iptv-wii") != std::string::npos) {
         return true;
     }
 
