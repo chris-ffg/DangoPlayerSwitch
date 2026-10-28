@@ -4,18 +4,27 @@
 
 #include "media/player.h"
 #include "config.h"
+#include "network/http_client.h"
 #include "utils/string_utils.h"
 #include "utils/logger.h"
 #include <mpv/client.h>
+#include <mpv/render_gl.h>
+#include <SDL2/SDL.h>
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <clocale>
 #include <algorithm>
 #include <map>
 #include <fstream>
 #include <sstream>
 
 static const char* RESUME_FILE = "sdmc:/switch/DangoPlayer/resume_cache.txt";
+
+static void* get_proc_address_mpv(void* ctx, const char* name) {
+    (void)ctx;
+    return SDL_GL_GetProcAddress(name);
+}
 
 MediaPlayer& MediaPlayer::Instance() {
     static MediaPlayer instance;
@@ -33,7 +42,9 @@ MediaPlayer::~MediaPlayer() {
 bool MediaPlayer::Initialize() {
     if (initialized) return true;
 
-    Logger::Info("MediaPlayer: Initializing libmpv...");
+    Logger::Info("MediaPlayer: Initializing libmpv with OpenGL render context...");
+    std::setlocale(LC_NUMERIC, "C");
+
     mpv = mpv_create();
     if (!mpv) {
         Logger::Error("MediaPlayer: Failed to create mpv instance!");
@@ -42,15 +53,22 @@ bool MediaPlayer::Initialize() {
 
     // Hardware decoding configuration (Tegra X1 NVDEC)
     mpv_set_option_string(mpv, "hwdec", "auto-safe");
-    mpv_set_option_string(mpv, "vo", "gpu");
-    mpv_set_option_string(mpv, "gpu-context", "auto");
-    mpv_set_option_string(mpv, "user-agent", "Mozilla/5.0 (Nintendo Switch; DangoPlayer/1.0)");
     mpv_set_option_string(mpv, "tls-verify", "no");
 
-    // Cache / buffer settings optimized for Switch RAM
-    mpv_set_option_string(mpv, "demuxer-max-bytes", "32MiB");
-    mpv_set_option_string(mpv, "demuxer-max-back-bytes", "16MiB");
-    mpv_set_option_string(mpv, "network-timeout", "15");
+    // Network & streaming reliability options
+    mpv_set_option_string(mpv, "user-agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    mpv_set_option_string(mpv, "network-timeout", "30");
+    mpv_set_option_string(mpv, "demuxer-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5");
+
+    // Buffer and cache tuned for Switch RAM
+    mpv_set_option_string(mpv, "cache", "yes");
+    mpv_set_option_string(mpv, "demuxer-max-bytes", "64MiB");
+    mpv_set_option_string(mpv, "demuxer-max-back-bytes", "32MiB");
+
+    // Fast decoding optimizations
+    mpv_set_option_string(mpv, "vd-lavc-fast", "yes");
+    mpv_set_option_string(mpv, "vd-lavc-skiploopfilter", "all");
 
     // Audio & Subtitle configuration
     mpv_set_option_string(mpv, "sub-auto", "fuzzy");
@@ -63,7 +81,7 @@ bool MediaPlayer::Initialize() {
     mpv_set_property(mpv, "volume", MPV_FORMAT_INT64, &initVol);
 
     // Request async events
-    mpv_request_log_messages(mpv, "warn");
+    mpv_request_log_messages(mpv, "info");
 
     int res = mpv_initialize(mpv);
     if (res < 0) {
@@ -73,25 +91,65 @@ bool MediaPlayer::Initialize() {
         return false;
     }
 
+    // Initialize libmpv OpenGL render context
+    mpv_opengl_init_params gl_init = { get_proc_address_mpv, nullptr };
+    int adv_ctrl = 1;
+    mpv_render_param params[] = {
+        { MPV_RENDER_PARAM_API_TYPE, (void*)MPV_RENDER_API_TYPE_OPENGL },
+        { MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &gl_init },
+        { MPV_RENDER_PARAM_ADVANCED_CONTROL, &adv_ctrl },
+        { MPV_RENDER_PARAM_INVALID, nullptr }
+    };
+
+    int gl_res = mpv_render_context_create(&mpv_gl, mpv, params);
+    if (gl_res < 0) {
+        Logger::Warn("MediaPlayer: mpv_render_context_create warning (%d): %s",
+                     gl_res, mpv_error_string(gl_res));
+    } else {
+        Logger::Info("MediaPlayer: mpv_render_context created successfully for OpenGL");
+    }
+
     initialized = true;
     status = PlayerStatus::Idle;
-    Logger::Info("MediaPlayer: Initialized successfully with NVDEC hwdec");
+    Logger::Info("MediaPlayer: Initialized successfully");
     return true;
 }
 
 void MediaPlayer::Shutdown() {
-    if (!initialized || !mpv) return;
+    if (!initialized) return;
 
     if (!metadata.path.empty() && position > 10.0) {
         SaveResumePosition(metadata.path, position);
     }
 
     Stop();
-    mpv_terminate_destroy(mpv);
-    mpv = nullptr;
+
+    if (mpv_gl) {
+        mpv_render_context_free(mpv_gl);
+        mpv_gl = nullptr;
+    }
+
+    if (mpv) {
+        mpv_terminate_destroy(mpv);
+        mpv = nullptr;
+    }
+
     initialized = false;
     status = PlayerStatus::Idle;
     Logger::Info("MediaPlayer: Shutdown complete");
+}
+
+void MediaPlayer::RenderVideo() {
+    if (!mpv_gl) return;
+
+    mpv_opengl_fbo fbo = { 0, 1280, 720, 0 };
+    int flip_y = 0;
+    mpv_render_param params[] = {
+        { MPV_RENDER_PARAM_OPENGL_FBO, &fbo },
+        { MPV_RENDER_PARAM_FLIP_Y, &flip_y },
+        { MPV_RENDER_PARAM_INVALID, nullptr }
+    };
+    mpv_render_context_render(mpv_gl, params);
 }
 
 bool MediaPlayer::Open(const std::string& path) {
@@ -101,26 +159,25 @@ bool MediaPlayer::Open(const std::string& path) {
 
     Stop();
 
-    // Sanitize spaces in URL
-    std::string safePath = (path.rfind("http://", 0) == 0 || path.rfind("https://", 0) == 0)
-                          ? StringUtils::ToLower(path.substr(0, 7)) == "http://" || StringUtils::ToLower(path.substr(0, 8)) == "https://"
-                            ? path : path
-                          : path;
-    // Replace unencoded spaces
-    size_t sPos = 0;
-    while ((sPos = safePath.find(' ', sPos)) != std::string::npos) {
-        safePath.replace(sPos, 1, "%20");
-        sPos += 3;
-    }
+    std::string safePath = HttpClient::SanitizeUrl(path);
 
     metadata = MediaMetadata();
     metadata.path = safePath;
-    metadata.title = StringUtils::GetFilename(path);
+
+    // URL decode filename for clean title display in HUD
+    std::string title = StringUtils::GetFilename(path);
+    size_t p = 0;
+    while ((p = title.find("%20", p)) != std::string::npos) {
+        title.replace(p, 3, " ");
+        p += 1;
+    }
+    metadata.title = title;
+
     position = 0.0;
     duration = 0.0;
     status = PlayerStatus::Loading;
 
-    Logger::Info("MediaPlayer: Loading file: %s", safePath.c_str());
+    Logger::Info("MediaPlayer: Loading file/stream: %s", safePath.c_str());
 
     const char* cmd[] = {"loadfile", safePath.c_str(), "replace", nullptr};
     int res = mpv_command(mpv, cmd);
@@ -367,6 +424,14 @@ void MediaPlayer::Update() {
                 int paused = 0;
                 mpv_get_property(mpv, "pause", MPV_FORMAT_FLAG, &paused);
                 status = paused ? PlayerStatus::Paused : PlayerStatus::Playing;
+                break;
+            }
+
+            case MPV_EVENT_LOG_MESSAGE: {
+                mpv_event_log_message* msg = (mpv_event_log_message*)event->data;
+                if (msg && msg->log_level >= MPV_LOG_LEVEL_WARN) {
+                    Logger::Warn("mpv [%s] %s: %s", msg->prefix, msg->level, msg->text);
+                }
                 break;
             }
 

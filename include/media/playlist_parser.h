@@ -47,6 +47,9 @@ namespace PlaylistParser {
     /// Parse a PLS playlist string
     bool ParsePLS(const std::string& content, Playlist& outPlaylist, const std::string& baseUrl = "");
 
+    /// Parse a WiiMC / Navi-X / PLX key-value playlist (used by PassionWii news/novedades)
+    bool ParseWiiMC(const std::string& content, Playlist& outPlaylist, const std::string& baseUrl = "");
+
     /// Load and parse a playlist from a local file (.m3u, .m3u8, .pls)
     bool LoadFromFile(const std::string& filePath, Playlist& outPlaylist);
 

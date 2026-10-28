@@ -17,8 +17,9 @@
 #include <vector>
 #include <functional>
 
-// Forward declaration of mpv_handle
+// Forward declaration of mpv_handle and mpv_render_context
 struct mpv_handle;
+struct mpv_render_context;
 
 class MediaPlayer {
 public:
@@ -29,6 +30,9 @@ public:
 
     /// Open and start playing a media file or stream URL
     bool Open(const std::string& path);
+
+    /// Render the current MPV video frame into the active OpenGL framebuffer
+    void RenderVideo();
 
     /// Playback controls
     void Play();
@@ -79,6 +83,7 @@ private:
     void CheckResume(const std::string& path);
 
     mpv_handle* mpv = nullptr;
+    mpv_render_context* mpv_gl = nullptr;
     PlayerStatus status = PlayerStatus::Idle;
 
     double position = 0.0;

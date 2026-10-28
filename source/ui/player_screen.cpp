@@ -72,11 +72,10 @@ void PlayerScreen::Update(float dt) {
 }
 
 void PlayerScreen::Render(SDL_Renderer* renderer) {
-    // Clear background to pure black (standard for video)
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderClear(renderer);
-
     if (hasShownError) {
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        SDL_RenderClear(renderer);
+
         UI::DrawRoundedRect(renderer, Layout::SCREEN_W / 2 - 250, Layout::SCREEN_H / 2 - 40, 500, 80, 12, Colors::BG_CARD);
         UI::DrawTextCentered(renderer, app->GetFont(), "Error al reproducir enlace multimedia",
                              {Layout::SCREEN_W / 2 - 250, Layout::SCREEN_H / 2 - 40, 500, 45}, Colors::DANGO_PINK);
@@ -85,6 +84,9 @@ void PlayerScreen::Render(SDL_Renderer* renderer) {
         return;
     }
 
-    // Overlay HUD
+    // 1. Render video frame directly to OpenGL framebuffer
+    MediaPlayer::Instance().RenderVideo();
+
+    // 2. Render HUD overlay on top
     overlay.Render(renderer);
 }

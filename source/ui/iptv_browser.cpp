@@ -568,22 +568,12 @@ void IPTVBrowser::RenderSidebar(SDL_Renderer* renderer) {
     UI::DrawRect(renderer, 0, 0, SIDEBAR_W, Layout::SCREEN_H, Colors::BG_CARD);
     UI::DrawDivider(renderer, SIDEBAR_W - 1, 0, 1); // Vertical separator
 
-    // Logo / Brand Icon at top
-    UI::DrawRoundedRect(renderer, 24, 20, 48, 48, 12, Colors::DANGO_PINK);
-    UI::DrawText(renderer, app->GetFontLarge(), "🍡", 32, 26, Colors::TEXT_PRIMARY, false, false);
+    // Logo / Brand Icon at top (Dango on a stick)
+    UI::DrawRoundedRect(renderer, 24, 20, 48, 48, 12, Colors::BG_SELECTED);
+    UI::DrawDangoIcon(renderer, 48, 44, 7);
 
-    struct NavItem {
-        const char* icon;
-        const char* label;
-        SidebarItem item;
-    };
-
-    static const NavItem navItems[5] = {
-        {"🏠", "Inicio",   SidebarItem::Home},
-        {"📺", "IPTV",     SidebarItem::IPTV},
-        {"⭐", "Favoritos",SidebarItem::Favorites},
-        {"🔍", "Buscar",   SidebarItem::Search},
-        {"⚙", "Ajustes",  SidebarItem::Settings}
+    static const char* navLabels[5] = {
+        "Inicio", "IPTV", "Favoritos", "Buscar", "Ajustes"
     };
 
     int startY = 100;
@@ -605,14 +595,22 @@ void IPTVBrowser::RenderSidebar(SDL_Renderer* renderer) {
             UI::DrawRoundedRect(renderer, 0, y + 14, 4, 40, 2, Colors::DANGO_PINK);
         }
 
+        SDL_Color iconCol = (isFocused || isActive) ? Colors::DANGO_PINK : Colors::TEXT_DISABLED;
         SDL_Color textCol = (isFocused || isActive) ? Colors::TEXT_PRIMARY : Colors::TEXT_DISABLED;
 
-        // Large icon
-        UI::DrawTextCentered(renderer, app->GetFont(), navItems[i].icon,
-                             {btnX, y + 10, btnW, 28}, textCol);
+        int iconCx = btnX + btnW / 2;
+        int iconCy = y + 22;
+
+        switch (i) {
+            case 0: UI::DrawIconHome(renderer, iconCx, iconCy, 26, iconCol); break;
+            case 1: UI::DrawIconTV(renderer, iconCx, iconCy, 26, iconCol); break;
+            case 2: UI::DrawIconStar(renderer, iconCx, iconCy, 24, iconCol); break;
+            case 3: UI::DrawIconSearch(renderer, iconCx, iconCy, 24, iconCol); break;
+            case 4: UI::DrawIconSettings(renderer, iconCx, iconCy, 26, iconCol); break;
+        }
 
         // Compact title under icon
-        UI::DrawTextCentered(renderer, app->GetFontTiny(), navItems[i].label,
+        UI::DrawTextCentered(renderer, app->GetFontTiny(), navLabels[i],
                              {btnX, y + 42, btnW, 20}, textCol);
     }
 }
@@ -637,10 +635,13 @@ void IPTVBrowser::RenderShelfView(SDL_Renderer* renderer) {
     // Title / Breadcrumbs
     std::string plTitle = pl.name;
     if (isSubFolder && !folderTitle.empty()) {
-        plTitle = "📁 " + folderTitle;
+        UI::DrawIconFolder(renderer, headerX + 120, headerY + 22, 22, Colors::DANGO_ORANGE);
+        UI::DrawText(renderer, app->GetFont(), StringUtils::Truncate(folderTitle, 36),
+                     headerX + 138, headerY + 10, Colors::DANGO_CREAM, false, false);
+    } else {
+        UI::DrawText(renderer, app->GetFont(), StringUtils::Truncate(plTitle, 36),
+                     headerX + 110, headerY + 10, Colors::DANGO_CREAM, false, false);
     }
-    UI::DrawText(renderer, app->GetFont(), StringUtils::Truncate(plTitle, 36),
-                 headerX + 110, headerY + 10, Colors::DANGO_CREAM, false, false);
 
     // Category Selector pill on right
     int catBtnX = Layout::SCREEN_W - 250;
@@ -692,10 +693,16 @@ void IPTVBrowser::RenderShelfView(SDL_Renderer* renderer) {
         const auto& ch = displayedChannels[channelIndex];
         bool isContainer = (ch.type == PlaylistItemType::FolderContainer);
 
-        // Big Item Title
-        std::string titleStr = isContainer ? ("📁 " + ch.name) : ch.name;
-        UI::DrawText(renderer, app->GetFontLarge(), StringUtils::Truncate(titleStr, 50),
-                     headerX, detailY + 16, Colors::TEXT_PRIMARY, false, false);
+        // Big Item Title with vector icon
+        if (isContainer) {
+            UI::DrawIconFolder(renderer, headerX + 16, detailY + 34, 26, Colors::DANGO_ORANGE);
+            UI::DrawText(renderer, app->GetFontLarge(), StringUtils::Truncate(ch.name, 48),
+                         headerX + 38, detailY + 16, Colors::TEXT_PRIMARY, false, false);
+        } else {
+            UI::DrawIconFilm(renderer, headerX + 16, detailY + 34, 26, Colors::DANGO_PINK);
+            UI::DrawText(renderer, app->GetFontLarge(), StringUtils::Truncate(ch.name, 48),
+                         headerX + 38, detailY + 16, Colors::TEXT_PRIMARY, false, false);
+        }
 
         // Item Subtitle / Category
         std::string subInfo = isContainer ? ("[Carpeta / Categoria] " + ch.groupTitle) : ("[Video] " + ch.groupTitle);
@@ -769,10 +776,12 @@ void IPTVBrowser::RenderPosterCard(SDL_Renderer* renderer, const ChannelItem& ch
         // High-end placeholder card
         UI::DrawRoundedRect(renderer, x + 6, y + 6, w - 12, h - 60, 8, Colors::BG_DARK);
 
-        // Centered big icon
-        const char* icon = isContainer ? "📁" : "🎬";
-        UI::DrawTextCentered(renderer, app->GetFontLarge(), icon,
-                             {x + 6, y + h / 3 - 30, w - 12, 50}, Colors::DANGO_CREAM);
+        // Centered vector icon (vector folder for folders, film frame for videos)
+        if (isContainer) {
+            UI::DrawIconFolder(renderer, x + w / 2, y + h / 3 - 6, 60, Colors::DANGO_ORANGE);
+        } else {
+            UI::DrawIconFilm(renderer, x + w / 2, y + h / 3 - 6, 60, Colors::DANGO_PINK);
+        }
 
         // Poster title inside placeholder
         UI::DrawTextCentered(renderer, app->GetFontSmall(), StringUtils::Truncate(ch.name, 22),

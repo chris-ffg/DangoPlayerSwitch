@@ -381,6 +381,110 @@ bool ParsePLS(const std::string& content, Playlist& outPlaylist, const std::stri
     return !outPlaylist.channels.empty();
 }
 
+bool ParseWiiMC(const std::string& content, Playlist& outPlaylist, const std::string& baseUrl) {
+    outPlaylist.channels.clear();
+    outPlaylist.groups.clear();
+
+    std::stringstream ss(content);
+    std::string line;
+    std::set<std::string> groupSet;
+
+    ChannelItem currentItem;
+    std::string rawType;
+    bool hasPendingData = false;
+
+    auto commitItem = [&]() {
+        if (!hasPendingData) return;
+        if (currentItem.url.empty() && currentItem.name.empty()) {
+            hasPendingData = false;
+            return;
+        }
+
+        if (currentItem.url.empty()) {
+            hasPendingData = false;
+            currentItem = ChannelItem();
+            rawType.clear();
+            return;
+        }
+
+        currentItem.url = ResolveUrl(baseUrl, currentItem.url);
+
+        // Detect item type: FolderContainer vs MediaStream
+        currentItem.type = DetectItemType(currentItem.name, currentItem.url);
+        if (rawType == "playlist" || rawType == "folder") {
+            currentItem.type = PlaylistItemType::FolderContainer;
+        }
+
+        if (currentItem.name.empty()) {
+            currentItem.name = StringUtils::GetFilename(currentItem.url);
+        }
+
+        if (currentItem.groupTitle.empty() || currentItem.groupTitle == "General") {
+            currentItem.groupTitle = (currentItem.type == PlaylistItemType::FolderContainer) ? "Carpetas" : "Novedades";
+        }
+
+        outPlaylist.channels.push_back(currentItem);
+        groupSet.insert(currentItem.groupTitle);
+
+        currentItem = ChannelItem();
+        rawType.clear();
+        hasPendingData = false;
+    };
+
+    while (std::getline(ss, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) {
+            line.pop_back();
+        }
+        size_t start = line.find_first_not_of(" \t");
+        if (start != std::string::npos) {
+            line = line.substr(start);
+        }
+        if (line.empty()) continue;
+
+        if (line[0] == '#') {
+            // New item block separator in WiiMC / PLX
+            commitItem();
+            continue;
+        }
+
+        size_t eqPos = line.find('=');
+        if (eqPos == std::string::npos) continue;
+
+        std::string key = StringUtils::ToLower(line.substr(0, eqPos));
+        std::string val = line.substr(eqPos + 1);
+        while (!val.empty() && (val.front() == ' ' || val.front() == '\t')) val.erase(val.begin());
+
+        hasPendingData = true;
+
+        if (key == "name") {
+            currentItem.name = val;
+        } else if (key == "thumb" || key == "icon" || key == "image") {
+            currentItem.logoUrl = val;
+        } else if (key == "url") {
+            currentItem.url = val;
+        } else if (key == "xml") {
+            if (currentItem.url.empty() && !val.empty()) {
+                currentItem.url = val;
+            }
+        } else if (key == "type") {
+            rawType = StringUtils::ToLower(val);
+        } else if (key == "group" || key == "category") {
+            currentItem.groupTitle = val;
+        }
+    }
+
+    commitItem();
+
+    outPlaylist.groups.push_back("Todos");
+    for (const auto& g : groupSet) {
+        outPlaylist.groups.push_back(g);
+    }
+
+    Logger::Info("PlaylistParser: Parsed WiiMC/PLX format (%zu items, %zu groups)",
+                 outPlaylist.channels.size(), outPlaylist.groups.size());
+    return !outPlaylist.channels.empty();
+}
+
 bool LoadFromFile(const std::string& filePath, Playlist& outPlaylist) {
     std::ifstream file(filePath);
     if (!file.is_open()) {
@@ -398,14 +502,24 @@ bool LoadFromFile(const std::string& filePath, Playlist& outPlaylist) {
     std::string ext = StringUtils::GetExtension(filePath);
     if (ext == ".pls") {
         return ParsePLS(content, outPlaylist, filePath);
-    } else {
-        return ParseM3U(content, outPlaylist, filePath);
     }
+
+    if (content.find("#EXTM3U") != std::string::npos || content.find("#EXTINF:") != std::string::npos) {
+        if (ParseM3U(content, outPlaylist, filePath) && !outPlaylist.channels.empty()) {
+            return true;
+        }
+    }
+
+    if (content.find("type=") != std::string::npos || content.find("URL=") != std::string::npos || content.find("url=") != std::string::npos) {
+        return ParseWiiMC(content, outPlaylist, filePath);
+    }
+
+    return ParseM3U(content, outPlaylist, filePath);
 }
 
 bool LoadFromUrl(const std::string& url, Playlist& outPlaylist) {
     std::string content;
-    if (!HttpClient::Get(url, content, 20)) {
+    if (!HttpClient::Get(url, content, 25)) {
         Logger::Error("PlaylistParser: Failed to download playlist from %s", url.c_str());
         return false;
     }
@@ -416,7 +530,29 @@ bool LoadFromUrl(const std::string& url, Playlist& outPlaylist) {
     }
     outPlaylist.source = url;
 
-    return ParseM3U(content, outPlaylist, url);
+    if (content.find("[playlist]") != std::string::npos) {
+        return ParsePLS(content, outPlaylist, url);
+    }
+
+    if (content.find("#EXTM3U") != std::string::npos || content.find("#EXTINF:") != std::string::npos) {
+        if (ParseM3U(content, outPlaylist, url) && !outPlaylist.channels.empty()) {
+            return true;
+        }
+    }
+
+    if (content.find("type=") != std::string::npos ||
+        content.find("name=") != std::string::npos ||
+        content.find("URL=") != std::string::npos ||
+        content.find("url=") != std::string::npos ||
+        content.find("thumb=") != std::string::npos) {
+        return ParseWiiMC(content, outPlaylist, url);
+    }
+
+    if (ParseM3U(content, outPlaylist, url) && !outPlaylist.channels.empty()) {
+        return true;
+    }
+
+    return ParseWiiMC(content, outPlaylist, url);
 }
 
 }  // namespace PlaylistParser

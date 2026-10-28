@@ -102,6 +102,15 @@ namespace UI {
     /// The icon is drawn vertically centered at (centerX, centerY).
     void DrawDangoIcon(SDL_Renderer* renderer, int centerX, int centerY, int radius);
 
+    /// Vector icon helpers (independent of font/emojis, rendered with SDL2_gfx)
+    void DrawIconFolder(SDL_Renderer* renderer, int cx, int cy, int size, SDL_Color color);
+    void DrawIconHome(SDL_Renderer* renderer, int cx, int cy, int size, SDL_Color color);
+    void DrawIconTV(SDL_Renderer* renderer, int cx, int cy, int size, SDL_Color color);
+    void DrawIconStar(SDL_Renderer* renderer, int cx, int cy, int size, SDL_Color color);
+    void DrawIconSearch(SDL_Renderer* renderer, int cx, int cy, int size, SDL_Color color);
+    void DrawIconSettings(SDL_Renderer* renderer, int cx, int cy, int size, SDL_Color color);
+    void DrawIconFilm(SDL_Renderer* renderer, int cx, int cy, int size, SDL_Color color);
+
     /// Linearly interpolate between two colors.
     SDL_Color LerpColor(SDL_Color a, SDL_Color b, float t);
 }

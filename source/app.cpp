@@ -90,6 +90,15 @@ bool App::InitSDL() {
         return false;
     }
 
+    // Ensure active OpenGL context for libmpv video rendering
+    if (!SDL_GL_GetCurrentContext()) {
+        SDL_GLContext glContext = SDL_GL_CreateContext(window);
+        if (glContext) {
+            SDL_GL_MakeCurrent(window, glContext);
+            Logger::Info("App: OpenGL context created and made current");
+        }
+    }
+
     // Enable alpha blending for transparent overlays
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
