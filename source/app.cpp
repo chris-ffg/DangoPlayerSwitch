@@ -164,10 +164,16 @@ void App::Run() {
         }
 
         // --- Pump SDL events (mouse/touch/quit) ---
+        bool backTriggered = false;
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) {
                 running = false;
+            } else if (event.type == SDL_KEYDOWN) {
+                // Map ESC and Android Back button to Joy-Con [B] button for Stack POP
+                if (event.key.keysym.sym == SDLK_ESCAPE || event.key.keysym.sym == SDLK_AC_BACK) {
+                    backTriggered = true;
+                }
             } else if (event.type == SDL_MOUSEBUTTONDOWN) {
                 TouchEvent touch{TouchEvent::Down, event.button.x, event.button.y, 0};
                 if (!screenStack.empty()) {
@@ -200,6 +206,9 @@ void App::Run() {
         padUpdate(&pad);
         u64 kDown = padGetButtonsDown(&pad);
         u64 kHeld = padGetButtons(&pad);
+        if (backTriggered) {
+            kDown |= HidNpadButton_B;
+        }
 
         // --- Analog stick support (Left stick up/down navigation) ---
         HidAnalogStickState stickL = padGetStickPos(&pad, 0);

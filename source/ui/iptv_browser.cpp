@@ -1,11 +1,12 @@
 // ============================================================================
-// DangoPlayer Switch — IPTV Browser Implementation
+// DangoPlayer Switch — IPTV Browser Implementation (with Nested M3U Support)
 // ============================================================================
 
 #include "ui/iptv_browser.h"
 #include "ui/player_screen.h"
 #include "ui/file_browser.h"
 #include "media/favorites_manager.h"
+#include "network/http_client.h"
 #include "app.h"
 #include "ui/ui_common.h"
 #include "utils/swkbd_helper.h"
@@ -14,25 +15,43 @@
 #include <algorithm>
 #include <cstdio>
 
+// Root Browser Constructor
 IPTVBrowser::IPTVBrowser(App* app, const std::string& autoLoadPath)
-    : Screen(app) {
+    : Screen(app), isSubFolder(false), hasLocalPlaylist(false) {
     if (!autoLoadPath.empty()) {
         LoadPlaylist(autoLoadPath);
     } else if (PlaylistManager::Instance().HasActivePlaylist()) {
+        currentPlaylist = PlaylistManager::Instance().GetCurrentPlaylist();
+        hasLocalPlaylist = true;
         showPlaylistsView = false;
         RefreshChannelList();
     }
 }
 
+// Sub-Folder Navigation Constructor
+IPTVBrowser::IPTVBrowser(App* app, const Playlist& subPlaylist, const std::string& title, bool isSub)
+    : Screen(app), isSubFolder(isSub), folderTitle(title), currentPlaylist(subPlaylist), hasLocalPlaylist(true) {
+    showPlaylistsView = false;
+    RefreshChannelList();
+}
+
+const Playlist& IPTVBrowser::GetActivePlaylist() const {
+    if (hasLocalPlaylist) {
+        return currentPlaylist;
+    }
+    return PlaylistManager::Instance().GetCurrentPlaylist();
+}
+
 void IPTVBrowser::OnEnter() {
-    Logger::Info("IPTVBrowser: OnEnter");
-    if (!showPlaylistsView && PlaylistManager::Instance().HasActivePlaylist()) {
+    Logger::Info("IPTVBrowser: OnEnter (isSubFolder=%d)", isSubFolder);
+    if (!showPlaylistsView && (hasLocalPlaylist || PlaylistManager::Instance().HasActivePlaylist())) {
         RefreshChannelList();
     }
 }
 
 void IPTVBrowser::LoadPlaylist(const std::string& pathOrUrl) {
     toast.Show("Cargando lista IPTV...", 2.0f);
+    RenderLoadingFrame("Cargando lista IPTV...");
 
     Playlist pl;
     bool ok = false;
@@ -43,6 +62,8 @@ void IPTVBrowser::LoadPlaylist(const std::string& pathOrUrl) {
     }
 
     if (ok && !pl.channels.empty()) {
+        currentPlaylist = pl;
+        hasLocalPlaylist = true;
         PlaylistManager::Instance().SetCurrentPlaylist(pl);
         PlaylistManager::Instance().AddEntry(pl.name, pathOrUrl);
 
@@ -53,14 +74,14 @@ void IPTVBrowser::LoadPlaylist(const std::string& pathOrUrl) {
         searchQuery.clear();
 
         RefreshChannelList();
-        toast.Show("Lista cargada: " + std::to_string(pl.channels.size()) + " canales", 2.2f);
+        toast.Show("Lista cargada: " + std::to_string(pl.channels.size()) + " elementos", 2.2f);
     } else {
         toast.Show("Error al cargar la lista", 2.2f);
     }
 }
 
 void IPTVBrowser::RefreshChannelList() {
-    const auto& pl = PlaylistManager::Instance().GetCurrentPlaylist();
+    const auto& pl = GetActivePlaylist();
     std::string currentGroup = "Todos";
     if (groupIndex >= 0 && groupIndex < (int)pl.groups.size()) {
         currentGroup = pl.groups[groupIndex];
@@ -71,7 +92,7 @@ void IPTVBrowser::RefreshChannelList() {
 }
 
 void IPTVBrowser::CycleGroup(int direction) {
-    const auto& pl = PlaylistManager::Instance().GetCurrentPlaylist();
+    const auto& pl = GetActivePlaylist();
     if (pl.groups.empty()) return;
 
     int totalGroups = (int)pl.groups.size();
@@ -92,7 +113,7 @@ void IPTVBrowser::PromptAddUrl() {
 
 void IPTVBrowser::PromptSearch() {
     std::string query = SwkbdHelper::Show(
-        "Buscar nombre de canal:",
+        "Buscar canal o carpeta:",
         searchQuery, 64
     );
     searchQuery = query;
@@ -100,6 +121,108 @@ void IPTVBrowser::PromptSearch() {
     if (!searchQuery.empty()) {
         toast.Show("Resultados para: " + searchQuery, 1.5f);
     }
+}
+
+void IPTVBrowser::RenderLoadingFrame(const std::string& message) {
+    SDL_Renderer* renderer = app->GetRenderer();
+    if (!renderer) return;
+
+    UI::SetColor(renderer, Colors::BG_DARK);
+    SDL_RenderClear(renderer);
+    Render(renderer);
+    toast.Show(message, 3.0f);
+    toast.Render(renderer, app->GetFontSmall());
+    SDL_RenderPresent(renderer);
+}
+
+bool IPTVBrowser::MightBeSubPlaylist(const ChannelItem& ch) const {
+    std::string urlLower = StringUtils::ToLower(ch.url);
+    std::string extLower = StringUtils::ToLower(StringUtils::GetExtension(ch.url));
+    std::string nameLower = StringUtils::ToLower(ch.name);
+
+    if (extLower == ".ts" || extLower == ".mp4" || extLower == ".mkv" ||
+        urlLower.rfind("rtsp://", 0) == 0 || urlLower.rfind("rtmp://", 0) == 0) {
+        return false;
+    }
+
+    if (nameLower.find("carpeta") != std::string::npos ||
+        nameLower.find("folder") != std::string::npos ||
+        nameLower.find("categoria") != std::string::npos ||
+        nameLower.find("temporada") != std::string::npos ||
+        nameLower.find("seccion") != std::string::npos) {
+        return true;
+    }
+
+    if (urlLower.find("type=m3u") != std::string::npos ||
+        urlLower.find("output=m3u") != std::string::npos ||
+        urlLower.find("/playlist") != std::string::npos ||
+        urlLower.find("/category") != std::string::npos) {
+        return true;
+    }
+
+    return false;
+}
+
+// ============================================================================
+// BIFURCATION POINT: Folder Container Navigation vs Media Stream Playback
+// ============================================================================
+void IPTVBrowser::HandleItemClick(const ChannelItem& ch) {
+    bool isFolder = (ch.type == PlaylistItemType::FolderContainer);
+
+    // If marked as stream but has sub-playlist characteristics, perform fast probe
+    if (!isFolder && MightBeSubPlaylist(ch)) {
+        toast.Show("Verificando contenido...", 1.2f);
+        RenderLoadingFrame("Verificando contenido...");
+        if (HttpClient::ProbeIsPlaylist(ch.url)) {
+            isFolder = true;
+        }
+    }
+
+    if (isFolder) {
+        // --------------------------------------------------------------------
+        // BIFURCATION A: FOLDER / CONTAINER NAVIGATION
+        // --------------------------------------------------------------------
+        // Do NOT invoke VideoPlayerEngine. Navigate into sub-directory.
+        NavigateToFolder(ch);
+    } else {
+        // --------------------------------------------------------------------
+        // BIFURCATION B: MEDIA STREAM PLAYBACK
+        // --------------------------------------------------------------------
+        // Direct media stream (.ts, .mp4, live HLS): launch PlayerScreen.
+        Logger::Info("IPTVBrowser: Playing stream -> %s (%s)", ch.name.c_str(), ch.url.c_str());
+        app->PushScreen(std::make_unique<PlayerScreen>(app, ch.url));
+    }
+}
+
+void IPTVBrowser::NavigateToFolder(const ChannelItem& ch) {
+    Logger::Info("IPTVBrowser: Navigating to sub-folder -> %s (%s)", ch.name.c_str(), ch.url.c_str());
+    toast.Show("Cargando carpeta: " + ch.name + "...", 3.0f);
+    RenderLoadingFrame("Cargando carpeta: " + ch.name + "...");
+
+    Playlist subPlaylist;
+    bool ok = false;
+    if (ch.url.rfind("http://", 0) == 0 || ch.url.rfind("https://", 0) == 0) {
+        ok = PlaylistParser::LoadFromUrl(ch.url, subPlaylist);
+    } else {
+        ok = PlaylistParser::LoadFromFile(ch.url, subPlaylist);
+    }
+
+    if (!ok || subPlaylist.channels.empty()) {
+        // REQUIREMENT 3: Error handling
+        // If sub-folder is empty or unreachable, show alert toast and remain in current folder.
+        Logger::Warn("IPTVBrowser: Sub-folder is empty or unreachable -> %s", ch.url.c_str());
+        toast.Show("Carpeta vacia o no disponible", 2.5f);
+        return;
+    }
+
+    if (subPlaylist.name.empty() || subPlaylist.name == "Lista IPTV Remota") {
+        subPlaylist.name = ch.name;
+    }
+
+    // REQUIREMENT 2: Hierarchical navigation stack PUSH
+    // Instantiate new IPTVBrowser for this sub-folder level and push to stack.
+    // Parent IPTVBrowser instance is preserved in screenStack with its exact scroll & selection.
+    app->PushScreen(std::make_unique<IPTVBrowser>(app, subPlaylist, ch.name, true));
 }
 
 // ============================================================================
@@ -201,21 +324,21 @@ void IPTVBrowser::HandleChannelsInput(u64 kDown) {
         CycleGroup(-1);
     }
 
-    // Select / Play Channel [A]
+    // Select / Play Channel or Enter Folder [A]
     if (kDown & HidNpadButton_A) {
         if (total > 0 && channelIndex >= 0 && channelIndex < total) {
-            const auto& ch = displayedChannels[channelIndex];
-            Logger::Info("IPTVBrowser: Playing stream -> %s (%s)", ch.name.c_str(), ch.url.c_str());
-            app->PushScreen(std::make_unique<PlayerScreen>(app, ch.url));
+            HandleItemClick(displayedChannels[channelIndex]);
         }
     }
 
-    // Toggle Favorite [ZL]
-    if (kDown & HidNpadButton_ZL) {
+    // Toggle Favorite [X] (or ZL alternative)
+    if (kDown & HidNpadButton_X) {
         if (total > 0 && channelIndex >= 0 && channelIndex < total) {
             const auto& ch = displayedChannels[channelIndex];
-            bool added = FavoritesManager::Instance().ToggleFavorite(ch.name, ch.url, ch.groupTitle, true);
-            toast.Show(added ? "Canal anadido a Favoritos" : "Canal quitado de Favoritos", 1.5f);
+            if (ch.type == PlaylistItemType::MediaStream) {
+                bool added = FavoritesManager::Instance().ToggleFavorite(ch.name, ch.url, ch.groupTitle, true);
+                toast.Show(added ? "Canal anadido a Favoritos" : "Canal quitado de Favoritos", 1.5f);
+            }
         }
     }
 
@@ -224,9 +347,16 @@ void IPTVBrowser::HandleChannelsInput(u64 kDown) {
         PromptSearch();
     }
 
-    // Return to Playlist Selection [B]
+    // Return back [B] — Stack POP vs Show Playlists
     if (kDown & HidNpadButton_B) {
-        showPlaylistsView = true;
+        if (isSubFolder) {
+            // REQUIREMENT 2: Hierarchical navigation stack POP
+            // Pop current sub-folder view, returning to parent directory
+            // without resetting parent playlist or losing scroll offset.
+            app->PopScreen();
+        } else {
+            showPlaylistsView = true;
+        }
     }
 }
 
@@ -268,10 +398,14 @@ void IPTVBrowser::HandleTouch(const TouchEvent& touch) {
             }
         }
     } else {
-        // Back to playlist list
+        // Back button (Subfolder POP vs Root Playlist View)
         if (touch.x >= Layout::MARGIN && touch.x <= Layout::MARGIN + 120 &&
             touch.y >= 30 && touch.y <= 85) {
-            showPlaylistsView = true;
+            if (isSubFolder) {
+                app->PopScreen();
+            } else {
+                showPlaylistsView = true;
+            }
             return;
         }
 
@@ -283,7 +417,7 @@ void IPTVBrowser::HandleTouch(const TouchEvent& touch) {
             return;
         }
 
-        // Tap on channel in list
+        // Tap on item in list (media stream or folder container)
         int listStartY = 96;
         for (int row = 0; row < CHANNELS_PER_PAGE; row++) {
             int idx = scrollOffset + row;
@@ -293,7 +427,7 @@ void IPTVBrowser::HandleTouch(const TouchEvent& touch) {
             if (touch.x >= Layout::MARGIN && touch.x <= Layout::SCREEN_W - Layout::MARGIN &&
                 touch.y >= y && touch.y <= y + ITEM_H) {
                 channelIndex = idx;
-                app->PushScreen(std::make_unique<PlayerScreen>(app, displayedChannels[idx].url));
+                HandleItemClick(displayedChannels[idx]);
                 return;
             }
         }
@@ -387,11 +521,11 @@ void IPTVBrowser::RenderPlaylistsView(SDL_Renderer* renderer) {
 }
 
 // ============================================================================
-// Render: Channels View
+// Render: Channels / Folder Directory View
 // ============================================================================
 
 void IPTVBrowser::RenderChannelsView(SDL_Renderer* renderer) {
-    const auto& pl = PlaylistManager::Instance().GetCurrentPlaylist();
+    const auto& pl = GetActivePlaylist();
     int headerY = 28;
 
     // Back Button [B]
@@ -399,11 +533,14 @@ void IPTVBrowser::RenderChannelsView(SDL_Renderer* renderer) {
     UI::DrawRoundedRect(renderer, Layout::MARGIN + 8, headerY + 10, 24, 24, 6, Colors::DANGO_PINK);
     UI::DrawText(renderer, app->GetFontTiny(), "B",
                  Layout::MARGIN + 20, headerY + 13, Colors::TEXT_PRIMARY, true, false);
-    UI::DrawText(renderer, app->GetFontSmall(), "Listas",
+    UI::DrawText(renderer, app->GetFontSmall(), isSubFolder ? "Atras" : "Listas",
                  Layout::MARGIN + 38, headerY + 12, Colors::TEXT_SECONDARY, false, false);
 
-    // Playlist title
-    std::string plTitle = StringUtils::Truncate(pl.name, 32);
+    // Playlist / Directory Title
+    std::string plTitle = StringUtils::Truncate(pl.name, 30);
+    if (isSubFolder && !folderTitle.empty()) {
+        plTitle = "📁 " + StringUtils::Truncate(folderTitle, 28);
+    }
     UI::DrawText(renderer, app->GetFont(), plTitle,
                  Layout::MARGIN + 100, headerY + 10, Colors::DANGO_CREAM, false, false);
 
@@ -418,14 +555,14 @@ void IPTVBrowser::RenderChannelsView(SDL_Renderer* renderer) {
 
     UI::DrawDivider(renderer, Layout::MARGIN, 84, Layout::SCREEN_W - Layout::MARGIN * 2);
 
-    // Channels List
+    // Channels / Folders List
     int listStartY = 96;
     int listX = Layout::MARGIN;
     int listW = Layout::SCREEN_W - Layout::MARGIN * 2 - 20;
     int total = (int)displayedChannels.size();
 
     if (total == 0) {
-        UI::DrawText(renderer, app->GetFont(), "No se encontraron canales en este grupo",
+        UI::DrawText(renderer, app->GetFont(), "No se encontraron elementos en este grupo",
                      Layout::SCREEN_W / 2, 320, Colors::TEXT_DISABLED, true, false);
     } else {
         int firstIndex = std::max(0, scrollOffset);
@@ -444,18 +581,26 @@ void IPTVBrowser::RenderChannelsView(SDL_Renderer* renderer) {
             }
 
             const auto& ch = displayedChannels[i];
+            bool isContainer = (ch.type == PlaylistItemType::FolderContainer);
 
-            // LIVE Badge
-            UI::DrawRoundedRect(renderer, listX + 16, itemY + 16, 48, 36, 6, Colors::DANGO_GREEN);
-            UI::DrawText(renderer, app->GetFontTiny(), "LIVE", listX + 40, itemY + 26, Colors::BG_DARK, true, false);
+            // Badge: Orange DIR for folder containers, Green LIVE for media streams
+            if (isContainer) {
+                UI::DrawRoundedRect(renderer, listX + 16, itemY + 16, 48, 36, 6, Colors::DANGO_ORANGE);
+                UI::DrawText(renderer, app->GetFontTiny(), "DIR", listX + 40, itemY + 26, Colors::TEXT_PRIMARY, true, false);
+            } else {
+                UI::DrawRoundedRect(renderer, listX + 16, itemY + 16, 48, 36, 6, Colors::DANGO_GREEN);
+                UI::DrawText(renderer, app->GetFontTiny(), "LIVE", listX + 40, itemY + 26, Colors::BG_DARK, true, false);
+            }
 
-            // Channel Name
+            // Name (prefixed with folder icon if container)
             SDL_Color textCol = isSel ? Colors::TEXT_PRIMARY : Colors::TEXT_SECONDARY;
-            UI::DrawText(renderer, app->GetFont(), StringUtils::Truncate(ch.name, 48),
+            std::string displayName = isContainer ? ("📁 " + ch.name) : ch.name;
+            UI::DrawText(renderer, app->GetFont(), StringUtils::Truncate(displayName, 48),
                          listX + 76, itemY + 12, textCol, false, false);
 
-            // Group subtitle
-            UI::DrawText(renderer, app->GetFontTiny(), ch.groupTitle,
+            // Subtitle: group and category type
+            std::string subTitle = isContainer ? ("[Carpeta] " + ch.groupTitle) : ch.groupTitle;
+            UI::DrawText(renderer, app->GetFontTiny(), subTitle,
                          listX + 76, itemY + 40, Colors::TEXT_DISABLED, false, false);
         }
     }
@@ -467,21 +612,25 @@ void IPTVBrowser::RenderChannelsView(SDL_Renderer* renderer) {
     int hintY = footerY + 14;
     UI::DrawRoundedRect(renderer, Layout::MARGIN, hintY, 26, 26, 6, Colors::DANGO_PINK);
     UI::DrawText(renderer, app->GetFontTiny(), "A", Layout::MARGIN + 13, hintY + 5, Colors::TEXT_PRIMARY, true, false);
-    UI::DrawText(renderer, app->GetFontSmall(), "Ver Canal", Layout::MARGIN + 32, hintY + 2, Colors::TEXT_SECONDARY, false, false);
 
-    int yX = Layout::MARGIN + 160;
+    bool hoveringFolder = (total > 0 && channelIndex >= 0 && channelIndex < total &&
+                           displayedChannels[channelIndex].type == PlaylistItemType::FolderContainer);
+    UI::DrawText(renderer, app->GetFontSmall(), hoveringFolder ? "Abrir carpeta" : "Ver Canal",
+                 Layout::MARGIN + 32, hintY + 2, Colors::TEXT_SECONDARY, false, false);
+
+    int yX = Layout::MARGIN + 180;
     UI::DrawRoundedRect(renderer, yX, hintY, 26, 26, 6, Colors::DANGO_CREAM);
     UI::DrawText(renderer, app->GetFontTiny(), "Y", yX + 13, hintY + 5, Colors::BG_DARK, true, false);
     UI::DrawText(renderer, app->GetFontSmall(), "Buscar", yX + 32, hintY + 2, Colors::TEXT_SECONDARY, false, false);
 
-    int zlX = Layout::MARGIN + 280;
-    UI::DrawRoundedRect(renderer, zlX, hintY, 32, 26, 6, Colors::DANGO_ORANGE);
-    UI::DrawText(renderer, app->GetFontTiny(), "ZL", zlX + 16, hintY + 5, Colors::TEXT_PRIMARY, true, false);
-    UI::DrawText(renderer, app->GetFontSmall(), "Favorito", zlX + 38, hintY + 2, Colors::TEXT_SECONDARY, false, false);
+    int xFavX = Layout::MARGIN + 300;
+    UI::DrawRoundedRect(renderer, xFavX, hintY, 26, 26, 6, Colors::DANGO_ORANGE);
+    UI::DrawText(renderer, app->GetFontTiny(), "X", xFavX + 13, hintY + 5, Colors::TEXT_PRIMARY, true, false);
+    UI::DrawText(renderer, app->GetFontSmall(), "Favorito", xFavX + 32, hintY + 2, Colors::TEXT_SECONDARY, false, false);
 
-    // Channel Counter
+    // Item Counter
     char countBuf[64];
-    snprintf(countBuf, sizeof(countBuf), "%d / %d canales",
+    snprintf(countBuf, sizeof(countBuf), "%d / %d elementos",
              total > 0 ? channelIndex + 1 : 0, total);
     UI::DrawText(renderer, app->GetFontSmall(), countBuf,
                  Layout::SCREEN_W - Layout::MARGIN - 10, hintY + 2, Colors::TEXT_DISABLED, false, false);

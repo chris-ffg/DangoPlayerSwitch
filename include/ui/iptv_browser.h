@@ -13,6 +13,8 @@
 class IPTVBrowser : public Screen {
 public:
     explicit IPTVBrowser(App* app, const std::string& autoLoadPath = "");
+    /// Sub-folder navigation constructor
+    IPTVBrowser(App* app, const Playlist& subPlaylist, const std::string& folderTitle, bool isSubFolder = true);
 
     void OnEnter() override;
     void HandleInput(u64 kDown, u64 kHeld) override;
@@ -30,8 +32,20 @@ private:
     void PromptAddUrl();
     void PromptSearch();
 
+    // Bifurcation & Nested Folder Navigation
+    void HandleItemClick(const ChannelItem& ch);
+    void NavigateToFolder(const ChannelItem& ch);
+    bool MightBeSubPlaylist(const ChannelItem& ch) const;
+    void RenderLoadingFrame(const std::string& message);
+    const Playlist& GetActivePlaylist() const;
+
     void RenderPlaylistsView(SDL_Renderer* renderer);
     void RenderChannelsView(SDL_Renderer* renderer);
+
+    bool isSubFolder = false;
+    std::string folderTitle;
+    Playlist currentPlaylist;
+    bool hasLocalPlaylist = false;
 
     bool showPlaylistsView = true;
     int playlistIndex = 0;

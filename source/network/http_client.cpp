@@ -88,6 +88,67 @@ bool Get(const std::string& url, std::string& outResponse, long timeoutSec) {
     }
 }
 
+bool ProbeIsPlaylist(const std::string& url, long timeoutSec) {
+    if (!sInitialized) {
+        if (!Initialize()) return false;
+    }
+
+    CURL* curl = curl_easy_init();
+    if (!curl) return false;
+
+    std::string buffer;
+    buffer.reserve(2048);
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "DangoPlayer-Switch/0.1.0");
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeoutSec);
+    curl_easy_setopt(curl, CURLOPT_RANGE, "0-1023");
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteStringCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buffer);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+
+    CURLcode res = curl_easy_perform(curl);
+    long httpCode = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+
+    char* ct = nullptr;
+    curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &ct);
+    std::string contentType = ct ? ct : "";
+
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK && res != CURLE_PARTIAL_FILE) {
+        Logger::Warn("HttpClient::ProbeIsPlaylist failed for %s: %s", url.c_str(), curl_easy_strerror(res));
+        return false;
+    }
+
+    // Check Content-Type header
+    bool ctPlaylist = (contentType.find("mpegurl") != std::string::npos ||
+                       contentType.find("x-scpls") != std::string::npos ||
+                       contentType.find("application/x-mpegURL") != std::string::npos ||
+                       contentType.find("vnd.apple.mpegurl") != std::string::npos);
+
+    // Check payload magic markers
+    bool hasExtM3U = (buffer.find("#EXTM3U") != std::string::npos);
+    bool hasPLS = (buffer.find("[playlist]") != std::string::npos || buffer.find("[Playlist]") != std::string::npos);
+
+    if (!hasExtM3U && !hasPLS && !ctPlaylist) {
+        return false;
+    }
+
+    // If it's an HLS video stream, it contains EXT-X-TARGETDURATION or EXT-X-MEDIA-SEQUENCE
+    if (buffer.find("#EXT-X-TARGETDURATION") != std::string::npos ||
+        buffer.find("#EXT-X-MEDIA-SEQUENCE") != std::string::npos) {
+        // This is a direct playable HLS media stream, not an IPTV category folder
+        return false;
+    }
+
+    // If it has #EXTINF: or #EXTM3U or [playlist], it is an IPTV playlist/folder container
+    return true;
+}
+
 bool DownloadFile(const std::string& url, const std::string& destPath,
                   std::function<void(double total, double current)> progressCb,
                   long timeoutSec) {
