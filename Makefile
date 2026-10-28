@@ -48,7 +48,8 @@ LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*
 # Libraries to link (order matters; wrapped in start/end group for circular deps)
 #---------------------------------------------------------------------------------
 LIBS	:=	-Wl,--start-group \
-			-lmpv -lavformat -lavcodec -lavutil -lswscale -lswresample -lass -lfribidi -ldav1d \
+			-lmpv -lavfilter -lavformat -lavcodec -lavutil -lswscale -lswresample \
+			-lplacebo -llua51 -lass -lfribidi -ldav1d \
 			-lcurl -lmbedtls -lmbedcrypto -lmbedx509 \
 			-lSDL2_ttf -lSDL2_image -lSDL2_gfx -lSDL2_mixer \
 			-lSDL2 -lglad -lEGL -lGLESv2 -lglapi -ldrm_nouveau \

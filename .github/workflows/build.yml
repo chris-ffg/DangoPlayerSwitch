@@ -38,6 +38,8 @@ jobs:
             switch-libass \
             switch-libfribidi \
             switch-dav1d \
+            switch-libplacebo \
+            switch-liblua51 \
             switch-curl \
             switch-mbedtls
 
