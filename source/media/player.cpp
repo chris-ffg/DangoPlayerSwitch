@@ -69,9 +69,8 @@ bool MediaPlayer::Initialize() {
     mpv_set_option_string(mpv, "demuxer-max-bytes", "64MiB");
     mpv_set_option_string(mpv, "demuxer-max-back-bytes", "32MiB");
 
-    // Video orientation: Nintendo Switch display in OpenGL requires 180 deg rotation
-    // to correct for inverted Y and mirrored X.
-    mpv_set_option_string(mpv, "video-rotate", "180");
+    // Video orientation: Nintendo Switch OpenGL FBO 0 has flip_y=1, so default rotation is 0
+    mpv_set_option_string(mpv, "video-rotate", "0");
 
     // Fast decoding optimizations
     mpv_set_option_string(mpv, "vd-lavc-fast", "yes");
@@ -154,7 +153,7 @@ void MediaPlayer::RenderVideo() {
     int w = 1280;
     int h = 720;
     mpv_opengl_fbo fbo = { 0, w, h, 0 };
-    int flip_y = 0;
+    int flip_y = 1;
     mpv_render_param params[] = {
         { MPV_RENDER_PARAM_OPENGL_FBO, &fbo },
         { MPV_RENDER_PARAM_FLIP_Y, &flip_y },
@@ -269,10 +268,10 @@ void MediaPlayer::Stop() {
 }
 
 void MediaPlayer::CycleRotation() {
-    if (currentRotation == 180) currentRotation = 0;
-    else if (currentRotation == 0) currentRotation = 90;
-    else if (currentRotation == 90) currentRotation = 270;
-    else currentRotation = 180;
+    if (currentRotation == 0) currentRotation = 90;
+    else if (currentRotation == 90) currentRotation = 180;
+    else if (currentRotation == 180) currentRotation = 270;
+    else currentRotation = 0;
 
     SetRotation(currentRotation);
 }

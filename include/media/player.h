@@ -94,7 +94,7 @@ private:
     double position = 0.0;
     double duration = 0.0;
     int volume = 100;
-    int currentRotation = 180;
+    int currentRotation = 0;
 
     MediaMetadata metadata;
     std::function<void()> onEndedCallback = nullptr;
