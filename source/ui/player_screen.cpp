@@ -7,6 +7,9 @@
 #include "app.h"
 #include "ui/ui_common.h"
 #include "utils/logger.h"
+#ifdef __SWITCH__
+#include <switch.h>
+#endif
 
 PlayerScreen::PlayerScreen(App* app, const std::string& filePath, const std::string& title)
     : Screen(app), mediaPath(filePath), mediaTitle(title), overlay(app) {}
@@ -34,6 +37,11 @@ void PlayerScreen::OnEnter() {
 
 void PlayerScreen::OnExit() {
     Logger::Info("PlayerScreen: Exiting player");
+
+#ifdef __SWITCH__
+    // Re-enable normal auto-sleep and screen dimming when leaving the player
+    appletSetMediaPlaybackState(false);
+#endif
 
     auto& player = MediaPlayer::Instance();
     // 1. Immediately disarm callback
@@ -66,6 +74,11 @@ void PlayerScreen::HandleTouch(const TouchEvent& touch) {
 void PlayerScreen::Update(float dt) {
     MediaPlayer::Instance().Update();
     overlay.Update(dt);
+
+#ifdef __SWITCH__
+    // Continuously inhibit auto-sleep only while actively playing; allow sleep when paused
+    appletSetMediaPlaybackState(MediaPlayer::Instance().IsPlaying());
+#endif
 
     if (MediaPlayer::Instance().GetStatus() == PlayerStatus::Error) {
         if (!hasShownError) {

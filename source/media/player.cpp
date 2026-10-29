@@ -7,6 +7,9 @@
 #include "network/http_client.h"
 #include "utils/string_utils.h"
 #include "utils/logger.h"
+#ifdef __SWITCH__
+#include <switch.h>
+#endif
 #include <mpv/client.h>
 #include <mpv/render_gl.h>
 #include <SDL2/SDL.h>
@@ -121,6 +124,9 @@ bool MediaPlayer::Initialize() {
 }
 
 void MediaPlayer::Shutdown() {
+#ifdef __SWITCH__
+    appletSetMediaPlaybackState(false);
+#endif
     if (!initialized) return;
 
     if (!metadata.path.empty() && position > 10.0) {
@@ -216,6 +222,11 @@ bool MediaPlayer::Open(const std::string& path, const std::string& explicitTitle
     int64_t curVol = volume > 0 ? volume : 100;
     mpv_set_property(mpv, "volume", MPV_FORMAT_INT64, &curVol);
 
+#ifdef __SWITCH__
+    // Inhibit auto-sleep & screen dimming during playback
+    appletSetMediaPlaybackState(true);
+#endif
+
     // Check if resume position exists
     if (Config::Instance().Get().resumePlayback) {
         double resumePos = GetResumePosition(path);
@@ -233,6 +244,10 @@ void MediaPlayer::Play() {
     int pauseVal = 0;
     mpv_set_property(mpv, "pause", MPV_FORMAT_FLAG, &pauseVal);
     status = PlayerStatus::Playing;
+#ifdef __SWITCH__
+    // Inhibit auto-sleep while actively playing
+    appletSetMediaPlaybackState(true);
+#endif
 }
 
 void MediaPlayer::Pause() {
@@ -240,6 +255,10 @@ void MediaPlayer::Pause() {
     int pauseVal = 1;
     mpv_set_property(mpv, "pause", MPV_FORMAT_FLAG, &pauseVal);
     status = PlayerStatus::Paused;
+#ifdef __SWITCH__
+    // Allow auto-sleep and screen dimming when paused
+    appletSetMediaPlaybackState(false);
+#endif
 }
 
 void MediaPlayer::TogglePause() {
@@ -251,6 +270,10 @@ void MediaPlayer::TogglePause() {
 }
 
 void MediaPlayer::Stop() {
+#ifdef __SWITCH__
+    // Allow auto-sleep when playback is stopped
+    appletSetMediaPlaybackState(false);
+#endif
     if (!mpv) return;
 
     if (!metadata.path.empty() && position > 10.0) {
@@ -421,6 +444,9 @@ void MediaPlayer::Update() {
             case MPV_EVENT_FILE_LOADED: {
                 Logger::Info("MediaPlayer: Event File Loaded");
                 status = PlayerStatus::Playing;
+#ifdef __SWITCH__
+                appletSetMediaPlaybackState(true);
+#endif
 
                 // Log active audio driver
                 char* aoName = mpv_get_property_string(mpv, "current-ao");
@@ -466,6 +492,9 @@ void MediaPlayer::Update() {
             }
 
             case MPV_EVENT_END_FILE: {
+#ifdef __SWITCH__
+                appletSetMediaPlaybackState(false);
+#endif
                 mpv_event_end_file* end_file = (mpv_event_end_file*)event->data;
                 if (!end_file) break;
 
@@ -489,6 +518,9 @@ void MediaPlayer::Update() {
                 int paused = 0;
                 mpv_get_property(mpv, "pause", MPV_FORMAT_FLAG, &paused);
                 status = paused ? PlayerStatus::Paused : PlayerStatus::Playing;
+#ifdef __SWITCH__
+                appletSetMediaPlaybackState(!paused);
+#endif
                 break;
             }
 
