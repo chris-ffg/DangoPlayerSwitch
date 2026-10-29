@@ -29,6 +29,7 @@ namespace Colors {
     constexpr SDL_Color DANGO_CREAM  = {245, 232, 211, 255};  // #F5E8D3 — warm secondary
     constexpr SDL_Color DANGO_GREEN  = {144, 190, 147, 255};  // #90BE93 — tertiary green
     constexpr SDL_Color DANGO_ORANGE = {240, 168, 104, 255};  // #F0A868 — warm highlight
+    constexpr SDL_Color DANGO_BLUE   = {120, 160, 230, 255};  // #78A0E6 — blue accent
 
     // Text hierarchy
     constexpr SDL_Color TEXT_PRIMARY   = {255, 255, 255, 255};  // full white
