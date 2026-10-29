@@ -51,8 +51,8 @@ bool MediaPlayer::Initialize() {
         return false;
     }
 
-    // Audio output: use native Nintendo Switch audren driver
-    mpv_set_option_string(mpv, "ao", "audren,null,");
+    // Audio output: use native Nintendo Switch Horizon OS audio driver (ao_hos)
+    mpv_set_option_string(mpv, "ao", "hos,null,");
 
     // Hardware decoding configuration (Tegra X1 NVDEC)
     mpv_set_option_string(mpv, "hwdec", "auto-safe");
@@ -208,9 +208,13 @@ bool MediaPlayer::Open(const std::string& path, const std::string& explicitTitle
         return false;
     }
 
-    // Force playback to start unpaused
+    // Force playback to start unpaused and unmuted
     int pauseVal = 0;
     mpv_set_property(mpv, "pause", MPV_FORMAT_FLAG, &pauseVal);
+    int muteVal = 0;
+    mpv_set_property(mpv, "mute", MPV_FORMAT_FLAG, &muteVal);
+    int64_t curVol = volume > 0 ? volume : 100;
+    mpv_set_property(mpv, "volume", MPV_FORMAT_INT64, &curVol);
 
     // Check if resume position exists
     if (Config::Instance().Get().resumePlayback) {
@@ -417,6 +421,13 @@ void MediaPlayer::Update() {
             case MPV_EVENT_FILE_LOADED: {
                 Logger::Info("MediaPlayer: Event File Loaded");
                 status = PlayerStatus::Playing;
+
+                // Log active audio driver
+                char* aoName = mpv_get_property_string(mpv, "current-ao");
+                if (aoName) {
+                    Logger::Info("MediaPlayer: Active audio driver: %s", aoName);
+                    mpv_free(aoName);
+                }
 
                 // Query duration
                 double dur = 0.0;
