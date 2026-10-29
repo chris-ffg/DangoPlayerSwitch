@@ -23,11 +23,11 @@ INCLUDES	:=	include include/ui include/ui/widgets include/media include/network 
 ROMFS		:=	romfs
 
 #---------------------------------------------------------------------------------
-# Application metadata (shown in Homebrew Menu)
+# Application metadata (shown in Homebrew Menu & Forwarders)
 #---------------------------------------------------------------------------------
-APP_TITLE	:=	DangoPlayer Switch
-APP_AUTHOR	:=	DangoPlayer Team
-APP_VERSION	:=	0.1.0
+export APP_TITLE	:=	DangoPlayer Switch
+export APP_AUTHOR	:=	DangoPlayer Team
+export APP_VERSION	:=	0.1.0
 
 #---------------------------------------------------------------------------------
 # Compiler flags
@@ -106,6 +106,11 @@ endif
 # Use custom icon if present (place icon.jpg in project root)
 ifneq ($(wildcard $(CURDIR)/icon.jpg),)
 	export NROFLAGS	+=	--icon=$(CURDIR)/icon.jpg
+endif
+
+# Embed NACP metadata into the NRO (required for Sphaira forwarder installer and Home Menu)
+ifeq ($(strip $(NO_NACP)),)
+	export NROFLAGS	+=	--nacp=$(CURDIR)/$(TARGET).nacp
 endif
 
 .PHONY: $(BUILD) clean all
