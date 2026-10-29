@@ -54,6 +54,11 @@ public:
     void SetAudioTrack(int id);
     void SetSubtitleTrack(int id);
 
+    /// Video rotation controls (0, 90, 180, 270)
+    void CycleRotation();
+    void SetRotation(int degrees);
+    int GetRotation() const { return currentRotation; }
+
     /// State queries
     PlayerStatus GetStatus() const { return status; }
     double GetPosition() const { return position; }
@@ -89,6 +94,7 @@ private:
     double position = 0.0;
     double duration = 0.0;
     int volume = 100;
+    int currentRotation = 180;
 
     MediaMetadata metadata;
     std::function<void()> onEndedCallback = nullptr;

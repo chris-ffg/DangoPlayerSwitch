@@ -44,7 +44,7 @@ private:
     void HandlePlaylistsInput(u64 kDown);
     void HandleShelfInput(u64 kDown);
     void HandleSidebarInput(u64 kDown);
-    void RefreshChannelList();
+    void RefreshChannelList(bool resetSelection = false);
     void CycleGroup(int direction);
     void PromptAddUrl();
     void PromptSearch();

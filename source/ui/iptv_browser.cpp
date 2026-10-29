@@ -28,7 +28,7 @@ IPTVBrowser::IPTVBrowser(App* app, const std::string& autoLoadPath)
         currentPlaylist = PlaylistManager::Instance().GetCurrentPlaylist();
         hasLocalPlaylist = true;
         showPlaylistsView = false;
-        RefreshChannelList();
+        RefreshChannelList(true);
     }
 }
 
@@ -37,7 +37,7 @@ IPTVBrowser::IPTVBrowser(App* app, const Playlist& subPlaylist, const std::strin
     : Screen(app), isSubFolder(isSub), folderTitle(title), currentPlaylist(subPlaylist), hasLocalPlaylist(true),
       focusZone(FocusZone::Shelf), sidebarIndex(1) {
     showPlaylistsView = false;
-    RefreshChannelList();
+    RefreshChannelList(true);
 }
 
 const Playlist& IPTVBrowser::GetActivePlaylist() const {
@@ -49,8 +49,12 @@ const Playlist& IPTVBrowser::GetActivePlaylist() const {
 
 void IPTVBrowser::OnEnter() {
     Logger::Info("IPTVBrowser: OnEnter (isSubFolder=%d)", isSubFolder);
-    if (!showPlaylistsView && (hasLocalPlaylist || PlaylistManager::Instance().HasActivePlaylist())) {
-        RefreshChannelList();
+    // Only initialize channel list if empty. When returning from video playback,
+    // preserve the user's selected card and scroll position!
+    if (displayedChannels.empty()) {
+        if (!showPlaylistsView && (hasLocalPlaylist || PlaylistManager::Instance().HasActivePlaylist())) {
+            RefreshChannelList(true);
+        }
     }
 }
 
@@ -80,23 +84,32 @@ void IPTVBrowser::LoadPlaylist(const std::string& pathOrUrl) {
         targetScrollX = 0.0f;
         searchQuery.clear();
 
-        RefreshChannelList();
+        RefreshChannelList(true);
         toast.Show("Lista cargada: " + std::to_string(pl.channels.size()) + " elementos", 2.2f);
     } else {
         toast.Show("Error al cargar la lista", 2.2f);
     }
 }
 
-void IPTVBrowser::RefreshChannelList() {
+void IPTVBrowser::RefreshChannelList(bool resetSelection) {
     const auto& pl = GetActivePlaylist();
     std::string currentGroup = "Todos";
     if (groupIndex >= 0 && groupIndex < (int)pl.groups.size()) {
         currentGroup = pl.groups[groupIndex];
     }
     displayedChannels = pl.GetFilteredChannels(currentGroup, searchQuery);
-    channelIndex = 0;
-    currentScrollX = 0.0f;
-    targetScrollX = 0.0f;
+
+    if (resetSelection) {
+        channelIndex = 0;
+        currentScrollX = 0.0f;
+        targetScrollX = 0.0f;
+    } else {
+        if (!displayedChannels.empty()) {
+            channelIndex = std::clamp(channelIndex, 0, (int)displayedChannels.size() - 1);
+        } else {
+            channelIndex = 0;
+        }
+    }
 }
 
 void IPTVBrowser::CycleGroup(int direction) {
@@ -105,7 +118,7 @@ void IPTVBrowser::CycleGroup(int direction) {
 
     int totalGroups = (int)pl.groups.size();
     groupIndex = (groupIndex + direction + totalGroups) % totalGroups;
-    RefreshChannelList();
+    RefreshChannelList(true);
     toast.Show("Grupo: " + pl.groups[groupIndex], 1.2f);
 }
 
@@ -125,7 +138,7 @@ void IPTVBrowser::PromptSearch() {
         searchQuery, 64
     );
     searchQuery = query;
-    RefreshChannelList();
+    RefreshChannelList(true);
     if (!searchQuery.empty()) {
         toast.Show("Resultados para: " + searchQuery, 1.5f);
     }

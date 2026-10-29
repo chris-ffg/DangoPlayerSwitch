@@ -16,13 +16,19 @@ PlayerScreen::~PlayerScreen() {}
 void PlayerScreen::OnEnter() {
     Logger::Info("PlayerScreen: Starting playback for %s (Title: %s)", mediaPath.c_str(), mediaTitle.c_str());
 
+    hasShownError = false;
+    errorTimer = 0.0f;
+
+    // Disarm any leftover callback before opening
+    MediaPlayer::Instance().SetOnEndedCallback(nullptr);
+    MediaPlayer::Instance().Open(mediaPath, mediaTitle);
+
     // When media finishes playing, automatically return to previous screen
     MediaPlayer::Instance().SetOnEndedCallback([this]() {
         Logger::Info("PlayerScreen: End of file reached, returning to browser");
         this->app->PopScreen();
     });
 
-    MediaPlayer::Instance().Open(mediaPath, mediaTitle);
     overlay.Show();
 }
 
@@ -30,6 +36,9 @@ void PlayerScreen::OnExit() {
     Logger::Info("PlayerScreen: Exiting player");
 
     auto& player = MediaPlayer::Instance();
+    // 1. Immediately disarm callback
+    player.SetOnEndedCallback(nullptr);
+
     const auto& meta = player.GetMetadata();
     bool isStream = (mediaPath.rfind("http://", 0) == 0 ||
                      mediaPath.rfind("https://", 0) == 0 ||
@@ -44,7 +53,6 @@ void PlayerScreen::OnExit() {
     );
 
     player.Stop();
-    player.SetOnEndedCallback(nullptr);
 }
 
 void PlayerScreen::HandleInput(u64 kDown, u64 kHeld) {

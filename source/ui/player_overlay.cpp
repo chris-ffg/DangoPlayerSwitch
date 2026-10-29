@@ -68,10 +68,42 @@ void PlayerOverlay::Update(float dt) {
 }
 
 void PlayerOverlay::HandleInput(u64 kDown, u64 kHeld) {
+    if (!kDown) return; // Do not reset auto-hide on empty frames
+
     auto& player = MediaPlayer::Instance();
 
-    // Reset auto-hide on any input
-    Show();
+    // If overlay is hidden, any button press wakes it up
+    if (!visible) {
+        Show();
+        if (kDown & HidNpadButton_B) {
+            player.Stop();
+            app->PopScreen();
+        }
+        return;
+    }
+
+    // Reset auto-hide on any active button press
+    autoHideTimer = AUTO_HIDE_DELAY;
+
+    // [B] Exit Player
+    if (kDown & HidNpadButton_B) {
+        player.Stop();
+        app->PopScreen();
+        return;
+    }
+
+    // [R] Cycle Video Rotation (180° -> 0° -> 90° -> 270°)
+    if (kDown & HidNpadButton_R) {
+        player.CycleRotation();
+        ShowOSD("Rotacion: " + std::to_string(player.GetRotation()) + "°");
+        return;
+    }
+
+    // [Minus] or [Stick click] can also hide controls immediately
+    if (kDown & (HidNpadButton_Minus | HidNpadButton_StickL | HidNpadButton_StickR)) {
+        Hide();
+        return;
+    }
 
     // =====================================================
     // Track Modal Navigation
@@ -179,32 +211,93 @@ void PlayerOverlay::HandleInput(u64 kDown, u64 kHeld) {
 }
 
 bool PlayerOverlay::HandleTouch(const TouchEvent& touch) {
-    Show();
+    if (touch.type != TouchEvent::Down) {
+        if (seekBar.HandleTouch(touch.x, touch.y)) {
+            if (touch.type == TouchEvent::Up) {
+                MediaPlayer::Instance().SeekPercent(seekBar.GetProgress());
+            }
+            return true;
+        }
+        return false;
+    }
 
-    // Check seek bar scrubbing
-    if (seekBar.HandleTouch(touch.x, touch.y)) {
-        MediaPlayer::Instance().SeekPercent(seekBar.GetProgress());
+    // Touch down event
+    if (modalOpen) {
+        modalOpen = false;
         return true;
     }
 
-    // Header Back button touch
-    if (touch.type == TouchEvent::Down) {
-        if (touch.x >= Layout::MARGIN && touch.x <= Layout::MARGIN + 100 &&
-            touch.y >= 20 && touch.y <= 75) {
-            MediaPlayer::Instance().Stop();
-            app->PopScreen();
-            return true;
-        }
+    if (!visible) {
+        // Tapping screen while hidden reveals controls
+        Show();
+        return true;
+    }
 
-        // Center tap toggles Play / Pause
-        if (touch.y >= 200 && touch.y <= 520 && touch.x >= 250 && touch.x <= 1030) {
-            MediaPlayer::Instance().TogglePause();
-            ShowOSD(MediaPlayer::Instance().IsPaused() ? "Pausa" : "Reproduciendo");
+    // Interactive Zone: Back button [B] (Top-left)
+    if (touch.x >= Layout::MARGIN && touch.x <= Layout::MARGIN + 120 &&
+        touch.y >= 10 && touch.y <= 75) {
+        MediaPlayer::Instance().Stop();
+        app->PopScreen();
+        return true;
+    }
+
+    // Interactive Zone: Top-right Rotation button
+    int badgeX = Layout::SCREEN_W - Layout::MARGIN - 170;
+    int rotBtnW = 150;
+    int rotBtnX = badgeX - rotBtnW - 14;
+    if (touch.x >= rotBtnX && touch.x <= rotBtnX + rotBtnW &&
+        touch.y >= 15 && touch.y <= 65) {
+        MediaPlayer::Instance().CycleRotation();
+        ShowOSD("Rotacion: " + std::to_string(MediaPlayer::Instance().GetRotation()) + "°");
+        autoHideTimer = AUTO_HIDE_DELAY;
+        return true;
+    }
+
+    // Interactive Zone: Seek bar
+    int seekY = Layout::SCREEN_H - Layout::FOOTER_H - 36;
+    if (touch.y >= seekY - 18 && touch.y <= seekY + 28) {
+        if (seekBar.HandleTouch(touch.x, touch.y)) {
+            MediaPlayer::Instance().SeekPercent(seekBar.GetProgress());
+            autoHideTimer = AUTO_HIDE_DELAY;
             return true;
         }
     }
 
-    return false;
+    // Interactive Zone: Bottom action bar buttons
+    if (touch.y >= Layout::SCREEN_H - 55 && touch.y <= Layout::SCREEN_H - 5) {
+        // Play / Pause
+        if (touch.x >= Layout::MARGIN && touch.x <= Layout::MARGIN + 140) {
+            MediaPlayer::Instance().TogglePause();
+            ShowOSD(MediaPlayer::Instance().IsPaused() ? "Pausa" : "Reproduciendo");
+            autoHideTimer = AUTO_HIDE_DELAY;
+            return true;
+        }
+        // Audio modal
+        if (touch.x >= Layout::MARGIN + 150 && touch.x <= Layout::MARGIN + 255) {
+            modalTrackType = TrackType::Audio;
+            modalSelectedIndex = 0;
+            modalOpen = true;
+            return true;
+        }
+        // Subtitles modal
+        if (touch.x >= Layout::MARGIN + 260 && touch.x <= Layout::MARGIN + 380) {
+            modalTrackType = TrackType::Subtitle;
+            modalSelectedIndex = 0;
+            modalOpen = true;
+            return true;
+        }
+        // Rotation button
+        if (touch.x >= Layout::MARGIN + 385 && touch.x <= Layout::MARGIN + 540) {
+            MediaPlayer::Instance().CycleRotation();
+            ShowOSD("Rotacion: " + std::to_string(MediaPlayer::Instance().GetRotation()) + "°");
+            autoHideTimer = AUTO_HIDE_DELAY;
+            return true;
+        }
+    }
+
+    // Tapping anywhere else on the screen hides the overlay immediately!
+    Hide();
+    return true;
 }
 
 void PlayerOverlay::Render(SDL_Renderer* renderer) {
@@ -251,8 +344,21 @@ void PlayerOverlay::RenderTopBar(SDL_Renderer* renderer) {
     UI::DrawText(renderer, app->GetFont(), titleTrunc,
                  Layout::MARGIN + 100, btnY + 8, Colors::DANGO_CREAM, false, false);
 
-    // Codec & Hardware Decoding Badge (right side)
+    // Badges layout (right side)
     int badgeX = Layout::SCREEN_W - Layout::MARGIN - 170;
+
+    // Rotation Button [R] (placed next to codec badge)
+    int rotBtnW = 140;
+    int rotBtnX = badgeX - rotBtnW - 12;
+    UI::DrawRoundedRect(renderer, rotBtnX, btnY + 4, rotBtnW, 36, 6, {40, 40, 60, a});
+    UI::DrawRoundedRect(renderer, rotBtnX + 8, btnY + 10, 24, 24, 4, Colors::DANGO_BLUE);
+    UI::DrawText(renderer, app->GetFontTiny(), "R",
+                 rotBtnX + 20, btnY + 14, Colors::TEXT_PRIMARY, true, false);
+    std::string rotStr = "Rotar: " + std::to_string(MediaPlayer::Instance().GetRotation()) + "°";
+    UI::DrawText(renderer, app->GetFontSmall(), rotStr,
+                 rotBtnX + 38, btnY + 11, Colors::TEXT_PRIMARY, false, false);
+
+    // Codec & Hardware Decoding Badge (right side)
     std::string badgeStr = meta.hwDecoded ? "NVDEC HW" : "CPU SW";
     SDL_Color badgeColor = meta.hwDecoded ? Colors::DANGO_GREEN : Colors::DANGO_ORANGE;
 
@@ -305,6 +411,13 @@ void PlayerOverlay::RenderBottomBar(SDL_Renderer* renderer) {
     UI::DrawRoundedRect(renderer, yX, hintY, 24, 24, 6, Colors::DANGO_CREAM);
     UI::DrawText(renderer, app->GetFontTiny(), "Y", yX + 12, hintY + 5, Colors::BG_DARK, true, false);
     UI::DrawText(renderer, app->GetFontSmall(), "Subtitulos", yX + 32, hintY + 2, Colors::TEXT_SECONDARY, false, false);
+
+    // (R) Rotation
+    int rX = Layout::MARGIN + 395;
+    UI::DrawRoundedRect(renderer, rX, hintY, 24, 24, 6, Colors::DANGO_BLUE);
+    UI::DrawText(renderer, app->GetFontTiny(), "R", rX + 12, hintY + 5, Colors::TEXT_PRIMARY, true, false);
+    std::string rotLabel = "Rotar (" + std::to_string(MediaPlayer::Instance().GetRotation()) + "°)";
+    UI::DrawText(renderer, app->GetFontSmall(), rotLabel, rX + 32, hintY + 2, Colors::TEXT_SECONDARY, false, false);
 
     // Volume level on right
     int vol = MediaPlayer::Instance().GetVolume();

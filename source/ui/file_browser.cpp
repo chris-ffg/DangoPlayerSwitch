@@ -27,7 +27,9 @@ FileBrowser::FileBrowser(App* app, const std::string& startPath)
 
 void FileBrowser::OnEnter() {
     Logger::Info("FileBrowser: OnEnter (path: %s)", currentPath.c_str());
-    OpenDirectory(currentPath);
+    if (items.empty()) {
+        OpenDirectory(currentPath);
+    }
 }
 
 // ============================================================================

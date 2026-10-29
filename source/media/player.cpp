@@ -69,6 +69,10 @@ bool MediaPlayer::Initialize() {
     mpv_set_option_string(mpv, "demuxer-max-bytes", "64MiB");
     mpv_set_option_string(mpv, "demuxer-max-back-bytes", "32MiB");
 
+    // Video orientation: Nintendo Switch display in OpenGL requires 180 deg rotation
+    // to correct for inverted Y and mirrored X.
+    mpv_set_option_string(mpv, "video-rotate", "180");
+
     // Fast decoding optimizations
     mpv_set_option_string(mpv, "vd-lavc-fast", "yes");
     mpv_set_option_string(mpv, "vd-lavc-skiploopfilter", "all");
@@ -166,6 +170,14 @@ bool MediaPlayer::Open(const std::string& path, const std::string& explicitTitle
 
     Stop();
 
+    // Drain any remaining events before opening the new file
+    if (mpv) {
+        while (true) {
+            mpv_event* event = mpv_wait_event(mpv, 0);
+            if (!event || event->event_id == MPV_EVENT_NONE) break;
+        }
+    }
+
     std::string safePath = HttpClient::SanitizeUrl(path);
 
     metadata = MediaMetadata();
@@ -183,7 +195,11 @@ bool MediaPlayer::Open(const std::string& path, const std::string& explicitTitle
     duration = 0.0;
     status = PlayerStatus::Loading;
 
-    Logger::Info("MediaPlayer: Loading stream: %s (Title: %s)", safePath.c_str(), metadata.title.c_str());
+    Logger::Info("MediaPlayer: Loading stream: %s (Title: %s, Rotation: %d)", safePath.c_str(), metadata.title.c_str(), currentRotation);
+
+    // Apply current rotation setting
+    std::string rotStr = std::to_string(currentRotation);
+    mpv_set_property_string(mpv, "video-rotate", rotStr.c_str());
 
     const char* cmd[] = {"loadfile", safePath.c_str(), "replace", nullptr};
     int res = mpv_command(mpv, cmd);
@@ -240,9 +256,34 @@ void MediaPlayer::Stop() {
 
     const char* cmd[] = {"stop", nullptr};
     mpv_command(mpv, cmd);
+
+    // Drain all pending events immediately so no leftover events linger in the queue
+    while (true) {
+        mpv_event* event = mpv_wait_event(mpv, 0);
+        if (!event || event->event_id == MPV_EVENT_NONE) break;
+    }
+
     status = PlayerStatus::Idle;
     position = 0.0;
     duration = 0.0;
+}
+
+void MediaPlayer::CycleRotation() {
+    if (currentRotation == 180) currentRotation = 0;
+    else if (currentRotation == 0) currentRotation = 90;
+    else if (currentRotation == 90) currentRotation = 270;
+    else currentRotation = 180;
+
+    SetRotation(currentRotation);
+}
+
+void MediaPlayer::SetRotation(int degrees) {
+    currentRotation = degrees;
+    if (mpv) {
+        std::string rotStr = std::to_string(currentRotation);
+        mpv_set_property_string(mpv, "video-rotate", rotStr.c_str());
+        Logger::Info("MediaPlayer: Video rotation set to %d degrees", currentRotation);
+    }
 }
 
 void MediaPlayer::Seek(double seconds, bool relative) {
@@ -416,16 +457,20 @@ void MediaPlayer::Update() {
 
             case MPV_EVENT_END_FILE: {
                 mpv_event_end_file* end_file = (mpv_event_end_file*)event->data;
-                if (end_file && end_file->reason == MPV_END_FILE_REASON_ERROR) {
+                if (!end_file) break;
+
+                if (end_file->reason == MPV_END_FILE_REASON_ERROR) {
                     Logger::Error("MediaPlayer: Playback error (%d): %s",
                                   end_file->error, mpv_error_string(end_file->error));
                     status = PlayerStatus::Error;
-                } else {
-                    Logger::Info("MediaPlayer: Event End of File reached");
+                } else if (end_file->reason == MPV_END_FILE_REASON_EOF) {
+                    Logger::Info("MediaPlayer: Natural End of File reached (duration: %.1f)", duration);
                     status = PlayerStatus::Ended;
                     if (onEndedCallback) {
                         onEndedCallback();
                     }
+                } else {
+                    Logger::Info("MediaPlayer: End of file event (reason=%d - stop/quit/redirect), ignoring callback", (int)end_file->reason);
                 }
                 break;
             }
